@@ -1,0 +1,343 @@
+import * as zarr from "zarrita";
+
+import {
+  ZARR_FORMAT,
+  type TDataSource,
+  type TSources,
+  type TZarrFormat,
+  type TZarrV3RootMetadata,
+} from "../types/GlobeTypes";
+
+import { createFetchStore } from "./authStore";
+import { lru } from "./lruStore";
+import { ZarrDataManager } from "./ZarrDataManager";
+
+import trim from "@/utils/trim";
+
+function isValidVariable(
+  varname: string,
+  shape: number[],
+  dimensions?: string[]
+) {
+  const EXCLUDED_VAR_PATTERNS = [
+    "bnds",
+    "bounds",
+    "vertices",
+    "latitude",
+    "longitude",
+    "cell_ids",
+    "time_instant",
+  ] as const;
+
+  if (!Array.isArray(dimensions)) {
+    return false;
+  }
+
+  const hasTime = dimensions.includes("time");
+  const shapeValid = hasTime ? shape.length >= 2 : shape.length >= 1;
+
+  const hasExcludedName = EXCLUDED_VAR_PATTERNS.some((pattern) =>
+    varname.includes(pattern)
+  );
+  const isLatLon = varname === "lat" || varname === "lon";
+
+  return shapeValid && !hasExcludedName && !isLatLon;
+}
+
+async function collectZarrV2Variables(
+  store: zarr.Listable<zarr.FetchStore>,
+  root: zarr.Group<zarr.FetchStore>,
+  src: string
+): Promise<{
+  candidates: PromiseSettledResult<Record<string, TDataSource>>[];
+  dimensions: Set<string>;
+}> {
+  const dimensions = new Set<string>();
+  const candidates = await Promise.allSettled(
+    store.contents().map(async ({ path, kind }) => {
+      if (kind !== "array") {
+        return {};
+      }
+      const variable = await zarr.open(root.resolve(path), { kind: "array" });
+      const arrayDimensions = variable.attrs?._ARRAY_DIMENSIONS;
+
+      if (Array.isArray(arrayDimensions)) {
+        for (const dim of arrayDimensions) {
+          dimensions.add(dim);
+        }
+      }
+
+      if (variable.attrs.coordinates) {
+        const coords = variable.attrs.coordinates as string;
+        for (const coord of coords.split(" ")) {
+          dimensions.add(coord);
+        }
+      }
+
+      const varname = path.slice(1);
+      return {
+        [varname]: {
+          store: src,
+          dataset: "",
+          hidden: !isValidVariable(
+            varname,
+            variable.shape,
+            arrayDimensions as string[]
+          ),
+          attrs: { ...variable.attrs, dimensionNames: arrayDimensions },
+        },
+      };
+    })
+  );
+
+  return { candidates, dimensions };
+}
+
+async function processZarrV2Variables(
+  store: zarr.Listable<zarr.FetchStore>,
+  root: zarr.Group<zarr.FetchStore>,
+  src: string
+): Promise<Record<string, TDataSource>> {
+  const { candidates, dimensions } = await collectZarrV2Variables(
+    store,
+    root,
+    src
+  );
+
+  // Filter and merge datasources
+  const datasources = candidates
+    .filter((promise) => promise.status === "fulfilled")
+    .map((promise) => promise.value)
+    .filter((obj) => Object.keys(obj).length > 0)
+    .map((obj) => {
+      // Filter out variables that are actually dimensions or coordinates
+      const varname = Object.keys(obj)[0];
+      if (dimensions.has(varname)) {
+        const hiddenObject = { [varname]: { ...obj[varname], hidden: true } };
+        return hiddenObject;
+      }
+      return obj;
+    })
+    .reduce((a, b) => ({ ...a, ...b }), {});
+
+  return datasources;
+}
+
+function processZarrV3Variables(
+  group: zarr.Group<zarr.FetchStore>,
+  src: string
+) {
+  const datasources: Record<
+    string,
+    {
+      store: string;
+      dataset: string;
+      hidden: boolean;
+      attrs: Record<string, unknown>;
+    }
+  > = {};
+  const dimensions = new Set<string>();
+  const attributes = group.attrs as TZarrV3RootMetadata;
+  const consolidatedMetadata = attributes.consolidated_metadata;
+  const metadata = consolidatedMetadata?.metadata;
+
+  for (const node of Object.values(metadata || {})) {
+    if (node.node_type === "array" && Array.isArray(node.dimension_names)) {
+      for (const dim of node.dimension_names) {
+        dimensions.add(dim);
+      }
+    }
+  }
+  for (const [name, node] of Object.entries(metadata || {})) {
+    if (node.node_type !== "array") {
+      continue;
+    }
+    const arrayNode = node as zarr.ArrayMetadata;
+    datasources[name] = {
+      store: src,
+      dataset: "",
+      hidden:
+        !isValidVariable(name, arrayNode.shape, arrayNode.dimension_names) ||
+        dimensions.has(name),
+      attrs: {
+        ...node.attributes,
+        dimensionNames: node.dimension_names,
+      } as Record<string, unknown>,
+    };
+  }
+  return datasources;
+}
+
+function createIndex(
+  title: string,
+  datasources: Record<string, TDataSource>,
+  src: string,
+  zarrFormat: TZarrFormat
+): TSources {
+  return {
+    name: title,
+    zarr_format: zarrFormat, // eslint-disable-line camelcase
+    levels: [
+      {
+        time: {
+          store: src,
+          dataset: "",
+        },
+        grid: {
+          store: src,
+          dataset: "",
+        },
+        datasources,
+      },
+    ],
+  };
+}
+
+export async function indexFromZarr(src: string): Promise<TSources> {
+  try {
+    const store = await zarr.withConsolidated(lru(createFetchStore(src)));
+    const root = await zarr.open(store, { kind: "group" });
+    const datasources = await processZarrV2Variables(store, root, src);
+    return createIndex(
+      root.attrs?.title as string,
+      datasources,
+      src,
+      ZARR_FORMAT.V2
+    );
+  } catch {
+    const group = await ZarrDataManager.openZarrV3Metadata(
+      createFetchStore(src)
+    );
+
+    // Detect multiscales metadata: redirect to the finest level subgroup
+    // Note: openZarrV3Metadata puts the full zarr.json as group.attrs,
+    // so actual group attributes are nested under group.attrs.attributes
+    const rootAttrs = group.attrs as TZarrV3RootMetadata;
+    const groupAttrs = (rootAttrs?.attributes ?? {}) as Record<string, unknown>;
+    if (groupAttrs?.multiscales) {
+      const ms = groupAttrs.multiscales as {
+        layout: Array<{ asset: string; [key: string]: unknown }>;
+      };
+      if (ms.layout?.length > 0) {
+        const baseUrl = src.replace(/\/$/, "");
+        const finestAsset = ms.layout[0].asset;
+        const levelUrl = baseUrl + "/" + finestAsset;
+        // Recursively index the subgroup (it's a regular zarr group)
+        const index = await indexFromZarr(levelUrl);
+        index.multiscales = { baseUrl, layout: ms.layout };
+        return index;
+      }
+    }
+
+    const datasources = processZarrV3Variables(group, src);
+    return createIndex(
+      group.attrs?.title as string,
+      datasources,
+      src,
+      ZARR_FORMAT.V3
+    );
+  }
+}
+
+/**
+ * JSON-based index may contain variables which belong to different dataset.
+ * This function collects variable names by their dataset combination, so
+ * that we can fetch metadata for each store only once.
+ */
+function collectStores(
+  datasources: Record<string, TDataSource>
+): Record<string, Set<string>> {
+  const stores: Record<string, Set<string>> = {};
+  for (const varname in datasources) {
+    const variable = datasources[varname];
+    const store = trim(variable.store, "/") + "/" + trim(variable.dataset, "/");
+    if (!stores[store]) {
+      stores[store] = new Set();
+    }
+    stores[store].add(varname);
+  }
+  return stores;
+}
+
+/**
+ * Enrich the index with dimension names and attributes from Zarr V2
+ * consolidated metadata.
+ */
+async function enrichMetadataWithZarrV2(
+  stores: Record<string, Set<string>>,
+  datasources: Record<string, TDataSource>
+) {
+  for (const [store, vars] of Object.entries(stores)) {
+    const zarrStore = await zarr.withConsolidated(lru(createFetchStore(store)));
+    const root = await zarr.open(zarrStore, { kind: "group" });
+
+    for (const varname of vars) {
+      try {
+        const variable = await zarr.open(root.resolve(`/${varname}`), {
+          kind: "array",
+        });
+        const arrayDimensions = variable.attrs?._ARRAY_DIMENSIONS;
+        datasources[varname].attrs = {
+          ...datasources[varname].attrs,
+          ...variable.attrs,
+          dimensionNames: arrayDimensions,
+        } as Record<string, unknown>;
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+/**
+ * Zarrita does not provide a proper way to get dimension names for Zarr V3
+ * arrays, so we need to fetch metadata for each store and enrich the index with
+ * dimension names and attributes.
+ */
+async function enrichMetadataWithZarrV3(
+  stores: Record<string, Set<string>>,
+  datasources: Record<string, TDataSource>
+) {
+  for (const [store, vars] of Object.entries(stores)) {
+    const group = await ZarrDataManager.openZarrV3Metadata(
+      createFetchStore(store)
+    );
+    if (group.attrs) {
+      const rootMetadata = group.attrs as TZarrV3RootMetadata;
+      const metadata = rootMetadata.consolidated_metadata?.metadata;
+      if (metadata) {
+        for (const varname of vars) {
+          const node = metadata[varname];
+          if (node && node.node_type === "array") {
+            const arrayNode = node as zarr.ArrayMetadata;
+            datasources[varname].attrs = {
+              ...datasources[varname].attrs,
+              ...arrayNode.attributes,
+              dimensionNames: arrayNode.dimension_names,
+            } as Record<string, unknown>;
+          }
+        }
+      }
+    }
+  }
+}
+
+export async function indexFromIndex(src: string): Promise<TSources> {
+  const res = await fetch(src);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch index from ${src}: ${res.statusText}`);
+  } else if (res.status >= 400) {
+    throw new Error(`Index not found at ${src}`);
+  }
+  const sources = (await res.json()) as TSources;
+  const datasources = sources.levels[0].datasources;
+  const stores = collectStores(datasources);
+  try {
+    await enrichMetadataWithZarrV3(stores, datasources);
+    sources.zarr_format = ZARR_FORMAT.V3; // eslint-disable-line camelcase
+  } catch {
+    await enrichMetadataWithZarrV2(stores, datasources);
+    sources.zarr_format = ZARR_FORMAT.V2; // eslint-disable-line camelcase
+  }
+  return sources;
+}
