@@ -61,11 +61,7 @@ export function useGridDataAccess() {
       const myDatasource = datasources!.levels[0].time;
 
       const timevalues = (
-        await ZarrDataManager.getVariableData(
-          myDatasource,
-          timeDimName,
-          [null]
-        )
+        await ZarrDataManager.getVariableData(myDatasource, timeDimName, [null])
       ).data as Int32Array;
 
       const timevar = await ZarrDataManager.getVariableInfo(

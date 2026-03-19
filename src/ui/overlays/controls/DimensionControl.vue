@@ -4,8 +4,6 @@ import debounce from "lodash.debounce";
 import { storeToRefs } from "pinia";
 import { computed, ref, watch } from "vue";
 
-import DatetimePicker from "./DatetimePicker.vue";
-
 import { useGlobeControlStore } from "@/store/store";
 
 const store = useGlobeControlStore();
@@ -14,13 +12,6 @@ const { varinfo, dimSlidersValues } = storeToRefs(store);
 // Local copies for debounced updates (excluding time dimension)
 const localSliders = ref<(number | null)[]>([]);
 const debouncedUpdaters = ref<Array<(value: number) => void>>([]);
-
-const timeRangeIndex = computed(() => {
-  if (!varinfo.value) return -1;
-  return varinfo.value.dimRanges.findIndex((range, idx) =>
-    isTimeDimension(range?.name, varinfo.value?.dimInfo[idx])
-  );
-});
 
 const hasValidDimensions = computed(() => {
   return (
@@ -77,24 +68,21 @@ watch(
   { deep: true }
 );
 
-// Handler for datetime picker
-function onDatetimeIndexUpdate(index: number) {
-  if (timeRangeIndex.value !== -1) {
-    localSliders.value[timeRangeIndex.value] = index;
-    dimSlidersValues.value[timeRangeIndex.value] = index;
-  }
-}
-
 /** Detect time dimension from CF metadata or name fallback. */
 function isTimeDimension(
   name: string | undefined,
   dimInfo?: { attrs?: Record<string, unknown> }
 ): boolean {
   const attrs = dimInfo?.attrs ?? {};
-  if (attrs.axis === "T") return true;
-  if (attrs.standard_name === "time") return true;
-  if (typeof attrs.units === "string" && attrs.units.includes(" since "))
+  if (attrs.axis === "T") {
     return true;
+  }
+  if (attrs.standard_name === "time") {
+    return true;
+  }
+  if (typeof attrs.units === "string" && attrs.units.includes(" since ")) {
+    return true;
+  }
   return name === "time" || name === "time_counter";
 }
 
@@ -104,8 +92,12 @@ function isDepthDimension(
   dimInfo?: { attrs?: Record<string, unknown> }
 ): boolean {
   const attrs = dimInfo?.attrs ?? {};
-  if (attrs.axis === "Z") return true;
-  if (attrs.positive === "up" || attrs.positive === "down") return true;
+  if (attrs.axis === "Z") {
+    return true;
+  }
+  if (attrs.positive === "up" || attrs.positive === "down") {
+    return true;
+  }
   return name === "s_rho" || name === "depth" || name === "lev";
 }
 
@@ -113,18 +105,23 @@ function formatDepthLabel(
   index: number | null | undefined,
   maxBound: number
 ): string {
-  if (index === null || index === undefined) return "-";
-  if (index === maxBound) return `Surface (level ${index})`;
-  if (index === 0) return `Bottom (level ${index})`;
+  if (index === null || index === undefined) {
+    return "-";
+  }
+  if (index === maxBound) {
+    return `Surface (level ${index})`;
+  }
+  if (index === 0) {
+    return `Bottom (level ${index})`;
+  }
   return `Level ${index}`;
 }
 
 /** Display label: use long_name from metadata, else format the name. */
-function dimensionLabel(
-  name: string,
-  dimInfo?: { longName?: string }
-): string {
-  if (dimInfo?.longName) return dimInfo.longName;
+function dimensionLabel(name: string, dimInfo?: { longName?: string }): string {
+  if (dimInfo?.longName) {
+    return dimInfo.longName;
+  }
   return String(name[0]).toUpperCase() + String(name).slice(1);
 }
 </script>
