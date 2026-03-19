@@ -12,7 +12,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@eopf-dggs/healpix-geo": "^0.1.0",
+    "@eopf-dggs/healpix-geo": "^0.2.0",
     "@fortawesome/fontawesome-free": "^7.1.0",
     "@hscmap/healpix": "^1.4.12",
     "@primevue/themes": "^4.5.4",
@@ -27,6 +27,7 @@
     "dayjs": "^1.11.19",
     "humanize-duration": "^3.33.2",
     "lodash.debounce": "4.0.8",
+    "maplibre-gl": "^5.20.2",
     "pinia": "^3.0.4",
     "primevue": "^4.3.6",
     "quick-lru": "^7.3.0",

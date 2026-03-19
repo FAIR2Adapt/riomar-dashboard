@@ -21,7 +21,7 @@ import { useUrlSync } from "@/store/useUrlSync";
 import Toast from "@/ui/common/Toast.vue";
 import GridCurvilinear from "@/ui/grids/Curvilinear.vue";
 import GridGaussianReduced from "@/ui/grids/GaussianReduced.vue";
-import GridHealpix from "@/ui/grids/Healpix.vue";
+import GridHealpixMaplibre from "@/ui/grids/HealpixMaplibre.vue";
 import GridIrregular from "@/ui/grids/Irregular.vue";
 import GridIrregularDelaunay from "@/ui/grids/IrregularDelaunay.vue";
 import GridRegular from "@/ui/grids/Regular.vue";
@@ -79,7 +79,7 @@ const modelInfo = computed(() => {
 
 const currentGlobeComponent = computed(() => {
   const gridMapping = {
-    [GRID_TYPES.HEALPIX]: GridHealpix,
+    [GRID_TYPES.HEALPIX]: GridHealpixMaplibre,
     [GRID_TYPES.REGULAR]: GridRegular,
     [GRID_TYPES.REGULAR_ROTATED]: GridRegular,
     [GRID_TYPES.TRIANGULAR]: GridTriangular,
