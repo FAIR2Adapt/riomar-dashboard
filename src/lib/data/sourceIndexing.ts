@@ -33,7 +33,8 @@ function isValidVariable(
     return false;
   }
 
-  const hasTime = dimensions.includes("time");
+  const hasTime =
+    dimensions.includes("time") || dimensions.includes("time_counter");
   const shapeValid = hasTime ? shape.length >= 2 : shape.length >= 1;
 
   const hasExcludedName = EXCLUDED_VAR_PATTERNS.some((pattern) =>

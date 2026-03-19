@@ -25,7 +25,7 @@ export const useGlobeControlStore = defineStore("globeControl", {
   state: () => {
     return {
       showCoastLines: true,
-      coastlineResolution: "50m" as TCoastlineResolution,
+      coastlineResolution: "10m" as TCoastlineResolution,
       // simplified UI choice (Off|Sea|Land|Globe) — used by controls
       landSeaMaskChoice: LAND_SEA_MASK_MODES.OFF as TLandSeaMaskMode,
       // when true, use the textured versions; when false, use the greyscale/solid versions
@@ -46,7 +46,7 @@ export const useGlobeControlStore = defineStore("globeControl", {
       dimSlidersDisplay: [] as (number | null)[],
       isInitializingVariable: false,
       controlPanelVisible: true,
-      projectionMode: PROJECTION_TYPES.NEARSIDE_PERSPECTIVE as TProjectionType,
+      projectionMode: PROJECTION_TYPES.MERCATOR as TProjectionType,
       projectionCenter: { lat: 0, lon: 0 } as TProjectionCenter,
     };
   },

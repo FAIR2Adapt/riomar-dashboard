@@ -40,24 +40,37 @@ export function useGridDataAccess() {
     }
   }
 
+  function isTimeLikeDimension(name: string | undefined): boolean {
+    return (
+      name === "time" ||
+      name === "time_counter" ||
+      name?.startsWith("time") === true
+    );
+  }
+
   async function getTimeInfo(
     datasources: TSources,
     dimensionRanges: TDimensionRange[],
     index: number
   ): Promise<TDimInfo> {
-    if (dimensionRanges[0]?.name !== "time") {
+    const timeDimName = dimensionRanges[0]?.name;
+    if (!timeDimName || !isTimeLikeDimension(timeDimName)) {
       return {};
     }
     try {
       const myDatasource = datasources!.levels[0].time;
 
       const timevalues = (
-        await ZarrDataManager.getVariableData(myDatasource, "time", [null])
+        await ZarrDataManager.getVariableData(
+          myDatasource,
+          timeDimName,
+          [null]
+        )
       ).data as Int32Array;
 
       const timevar = await ZarrDataManager.getVariableInfo(
         myDatasource,
-        "time"
+        timeDimName
       );
       return {
         values: timevalues,

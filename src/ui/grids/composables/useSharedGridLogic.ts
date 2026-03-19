@@ -171,7 +171,11 @@ export function useSharedGridLogic() {
   ): Promise<TDimInfo[]> {
     const array: TDimInfo[] = [];
     for (const dim of dimensionRanges) {
-      if (dim?.name === "time") {
+      if (
+        dim?.name === "time" ||
+        dim?.name === "time_counter" ||
+        dim?.name?.startsWith("time")
+      ) {
         const timeInfo = await getTimeInfo(
           datasources,
           dimensionRanges,

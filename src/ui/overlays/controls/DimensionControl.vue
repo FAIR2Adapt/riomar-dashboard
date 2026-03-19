@@ -16,8 +16,9 @@ const localSliders = ref<(number | null)[]>([]);
 const debouncedUpdaters = ref<Array<(value: number) => void>>([]);
 
 const timeRangeIndex = computed(() => {
-  return (
-    varinfo.value?.dimRanges.findIndex((range) => range?.name === "time") ?? -1
+  if (!varinfo.value) return -1;
+  return varinfo.value.dimRanges.findIndex((range, idx) =>
+    isTimeDimension(range?.name, varinfo.value?.dimInfo[idx])
   );
 });
 
@@ -26,7 +27,10 @@ const hasValidDimensions = computed(() => {
     varinfo.value &&
     varinfo.value.dimRanges.length > 1 &&
     varinfo.value.dimRanges.some(
-      (range) => range && (range.maxBound > 0 || range.name === "time")
+      (range, idx) =>
+        range &&
+        (range.maxBound > 0 ||
+          isTimeDimension(range.name, varinfo.value?.dimInfo[idx]))
     )
   );
 });
@@ -81,8 +85,47 @@ function onDatetimeIndexUpdate(index: number) {
   }
 }
 
-function capitalize(str: string): string {
-  return String(str[0]).toUpperCase() + String(str).slice(1);
+/** Detect time dimension from CF metadata or name fallback. */
+function isTimeDimension(
+  name: string | undefined,
+  dimInfo?: { attrs?: Record<string, unknown> }
+): boolean {
+  const attrs = dimInfo?.attrs ?? {};
+  if (attrs.axis === "T") return true;
+  if (attrs.standard_name === "time") return true;
+  if (typeof attrs.units === "string" && attrs.units.includes(" since "))
+    return true;
+  return name === "time" || name === "time_counter";
+}
+
+/** Detect vertical/depth dimension from CF metadata or name fallback. */
+function isDepthDimension(
+  name: string | undefined,
+  dimInfo?: { attrs?: Record<string, unknown> }
+): boolean {
+  const attrs = dimInfo?.attrs ?? {};
+  if (attrs.axis === "Z") return true;
+  if (attrs.positive === "up" || attrs.positive === "down") return true;
+  return name === "s_rho" || name === "depth" || name === "lev";
+}
+
+function formatDepthLabel(
+  index: number | null | undefined,
+  maxBound: number
+): string {
+  if (index === null || index === undefined) return "-";
+  if (index === maxBound) return `Surface (level ${index})`;
+  if (index === 0) return `Bottom (level ${index})`;
+  return `Level ${index}`;
+}
+
+/** Display label: use long_name from metadata, else format the name. */
+function dimensionLabel(
+  name: string,
+  dimInfo?: { longName?: string }
+): string {
+  if (dimInfo?.longName) return dimInfo.longName;
+  return String(name[0]).toUpperCase() + String(name).slice(1);
 }
 </script>
 
@@ -94,37 +137,49 @@ function capitalize(str: string): string {
   >
     <template v-for="(range, index) in varinfo!.dimRanges" :key="index">
       <div
-        v-if="range && (range.maxBound > 0 || range.name === 'time')"
+        v-if="
+          range &&
+          (range.maxBound > 0 ||
+            isTimeDimension(range.name, varinfo.dimInfo[index]))
+        "
         class="control"
       >
-        <!-- Generic dimension sliders -->
         <div class="">
           <div
             v-if="range"
             class="mb-2 w-100 is-flex is-justify-content-space-between"
           >
-            <div class="is-flex is-align-items-center" style="gap: 0.5rem">
-              {{ capitalize(range.name) }}:
-              <DatetimePicker
-                v-if="range.name === 'time'"
-                :time-values="varinfo.dimInfo[index]?.values ?? []"
-                :time-attrs="varinfo.dimInfo[index]?.attrs ?? {}"
-                :current-index="localSliders[index] ?? 0"
-                :min-index="range?.minBound ?? 0"
-                :max-index="range?.maxBound ?? 0"
-                @update:index="onDatetimeIndexUpdate"
-              />
+            <div class="has-text-weight-semibold">
+              {{ dimensionLabel(range.name, varinfo.dimInfo[index]) }}
             </div>
-            <div class="is-flex">
-              <input
-                v-model.number="localSliders[index]"
-                class="input"
-                type="number"
-                :min="range.minBound"
-                :max="range.maxBound"
-                style="width: 8em"
-              />
-              <div class="my-2 ml-2">/ {{ range.maxBound }}</div>
+            <div class="has-text-right">
+              <span
+                v-if="
+                  isTimeDimension(
+                    varinfo.dimRanges[index]?.name,
+                    varinfo.dimInfo[index]
+                  )
+                "
+              >
+                {{
+                  (varinfo.dimInfo[index]?.current as Dayjs)?.format?.(
+                    "YYYY-MM-DD HH:mm"
+                  ) ?? "-"
+                }}
+              </span>
+              <span
+                v-else-if="
+                  isDepthDimension(
+                    varinfo.dimRanges[index]?.name,
+                    varinfo.dimInfo[index]
+                  )
+                "
+              >
+                {{
+                  formatDepthLabel(localSliders[index], range?.maxBound ?? 0)
+                }}
+              </span>
+              <span v-else>{{ varinfo.dimInfo[index]?.current ?? "-" }}</span>
             </div>
           </div>
 
@@ -135,28 +190,6 @@ function capitalize(str: string): string {
             :min="range.minBound"
             :max="range.maxBound"
           />
-
-          <div class="w-100 is-flex is-justify-content-space-between">
-            <div>Current value</div>
-            <div class="has-text-right">
-              <span v-if="varinfo.dimRanges[index]?.name === 'time'">
-                {{
-                  (varinfo.dimInfo[index]?.current as Dayjs)?.format?.() ?? "-"
-                }}
-              </span>
-              <span v-else>{{ varinfo.dimInfo[index]?.current ?? "-" }}</span>
-              <br />
-            </div>
-          </div>
-          <div
-            v-if="
-              varinfo.dimInfo[index]?.longName || varinfo.dimInfo[index]?.units
-            "
-            class="has-text-right"
-          >
-            {{ varinfo.dimInfo[index]?.longName ?? "-" }} /
-            {{ varinfo.dimInfo[index]?.units ?? "-" }}
-          </div>
         </div>
       </div>
     </template>
