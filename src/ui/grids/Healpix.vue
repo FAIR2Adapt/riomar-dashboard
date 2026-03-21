@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-// eslint-disable-next-line camelcase, boundaries/no-unknown
+// eslint-disable-next-line camelcase
 import { pixcoord2vec_nest_nside, bit_combine } from "@eopf-dggs/healpix-geo";
 import { storeToRefs } from "pinia";
 import * as THREE from "three";

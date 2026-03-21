@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-// eslint-disable-next-line camelcase, boundaries/no-unknown
+// eslint-disable-next-line camelcase
 import { cell_vertices_lonlat_nside } from "@eopf-dggs/healpix-geo";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -216,6 +216,7 @@ async function fetchSlice(
   return { values, dimensionRanges, indices };
 }
 
+// eslint-disable-next-line max-lines-per-function
 async function getData(updateMode: TUpdateMode = UPDATE_MODE.INITIAL_LOAD) {
   if (!props.datasources || !map || cellIds.length === 0) {
     return;
@@ -251,7 +252,10 @@ async function getData(updateMode: TUpdateMode = UPDATE_MODE.INITIAL_LOAD) {
     if (source) {
       source.setData(geojson);
       // Fit map to data bounds on first load
-      if (geojson.features.length > 0 && updateMode === UPDATE_MODE.INITIAL_LOAD) {
+      if (
+        geojson.features.length > 0 &&
+        updateMode === UPDATE_MODE.INITIAL_LOAD
+      ) {
         const bounds = new maplibregl.LngLatBounds();
         for (const f of geojson.features) {
           for (const coord of (f.geometry as GeoJSON.Polygon).coordinates[0]) {
@@ -454,8 +458,13 @@ defineExpose({ makeSnapshot, toggleRotate });
     <div ref="mapContainer" class="globe_box" tabindex="0" autofocus />
     <div class="basemap-switcher">
       <button
-        v-for="(label, key) in { osm: 'OSM', emodnet: 'Bathymetry', satellite: 'Satellite' }"
+        v-for="(label, key) in {
+          osm: 'OSM',
+          emodnet: 'Bathymetry',
+          satellite: 'Satellite',
+        }"
         :key="key"
+        type="button"
         :class="{ active: selectedBasemap === key }"
         @click="switchBasemap(key as string)"
       >
