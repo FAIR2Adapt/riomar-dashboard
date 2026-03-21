@@ -54,16 +54,15 @@ function extractROId(pid: string): string {
 /**
  * Fetch all triples from a single annotation.
  */
-async function fetchAnnotationTriples(
-  annotationId: string,
-): Promise<Triple[]> {
+async function fetchAnnotationTriples(annotationId: string): Promise<Triple[]> {
   const triples: Triple[] = [];
-  let nextUrl: string | null =
-    `${ROHUB_API}annotations/${annotationId}/body/`;
+  let nextUrl: string | null = `${ROHUB_API}annotations/${annotationId}/body/`;
 
   while (nextUrl) {
     const resp: Response = await fetch(nextUrl);
-    if (!resp.ok) return triples;
+    if (!resp.ok) {
+      return triples;
+    }
     const data: { results?: Triple[]; next?: string } = await resp.json();
     const results = data.results ?? [];
     for (const r of results) {
@@ -93,11 +92,11 @@ export async function resolveROCrate(pid: string): Promise<string | null> {
   console.log(`[RO-Crate] Resolving ${pid} (id: ${roId})`);
 
   // Fetch annotations list (paginated response with results array)
-  const annotResp = await fetch(
-    `${ROHUB_API}ros/${roId}/annotations/`,
-  );
+  const annotResp = await fetch(`${ROHUB_API}ros/${roId}/annotations/`);
   if (!annotResp.ok) {
-    console.error(`[RO-Crate] Failed to fetch annotations: ${annotResp.status}`);
+    console.error(
+      `[RO-Crate] Failed to fetch annotations: ${annotResp.status}`
+    );
     return null;
   }
   const annotData = await annotResp.json();
@@ -112,35 +111,35 @@ export async function resolveROCrate(pid: string): Promise<string | null> {
   console.log(`[RO-Crate] Found ${allTriples.length} triples`);
 
   // Find ViewAction via potentialAction
-  const actionTriple = allTriples.find(
-    (t) => t.predicate === POTENTIAL_ACTION,
-  );
+  const actionTriple = allTriples.find((t) => t.predicate === POTENTIAL_ACTION);
 
   if (actionTriple) {
     const actionId = actionTriple.object;
 
     // Verify it's a ViewAction
     const typeTriple = allTriples.find(
-      (t) => t.subject === actionId && t.predicate === RDF_TYPE,
+      (t) => t.subject === actionId && t.predicate === RDF_TYPE
     );
     if (typeTriple?.object === VIEW_ACTION) {
       // Get the dataset resource URI from schema:object
       const objectTriple = allTriples.find(
-        (t) => t.subject === actionId && t.predicate === SCHEMA_OBJECT,
+        (t) => t.subject === actionId && t.predicate === SCHEMA_OBJECT
       );
 
       if (objectTriple) {
         // Resolve the resource URI to an actual URL
         const datasetUrl = await resolveResourceUrl(roId, objectTriple.object);
         if (datasetUrl) {
-          console.log(`[RO-Crate] Resolved dataset via ViewAction: ${datasetUrl}`);
+          console.log(
+            `[RO-Crate] Resolved dataset via ViewAction: ${datasetUrl}`
+          );
           return datasetUrl;
         }
       }
 
       // If schema:object resolution failed, check for urlTemplate
       const templateTriple = allTriples.find(
-        (t) => t.subject === actionId && t.predicate === URL_TEMPLATE,
+        (t) => t.subject === actionId && t.predicate === URL_TEMPLATE
       );
       if (templateTriple) {
         console.log(`[RO-Crate] Found urlTemplate: ${templateTriple.object}`);
@@ -149,7 +148,9 @@ export async function resolveROCrate(pid: string): Promise<string | null> {
   }
 
   // Fallback: find the first Dataset resource
-  console.log("[RO-Crate] No ViewAction found, falling back to Dataset resource");
+  console.log(
+    "[RO-Crate] No ViewAction found, falling back to Dataset resource"
+  );
   return await findDatasetResource(roId);
 }
 
@@ -158,14 +159,16 @@ export async function resolveROCrate(pid: string): Promise<string | null> {
  */
 async function resolveResourceUrl(
   roId: string,
-  resourceUri: string,
+  resourceUri: string
 ): Promise<string | null> {
   const resourceId = resourceUri.replace(/\/$/, "").split("/").pop()!;
   const resources = await fetchResources(roId);
 
   // Try exact match by ID
   const match = resources.find((r) => r.identifier === resourceId);
-  if (match?.url) return match.url;
+  if (match?.url) {
+    return match.url;
+  }
 
   // Fallback: find Dataset by type
   const dataset = resources.find((r) => r.type === "Dataset");
@@ -190,7 +193,9 @@ async function findDatasetResource(roId: string): Promise<string | null> {
  */
 async function fetchResources(roId: string): Promise<Resource[]> {
   const resp = await fetch(`${ROHUB_API}ros/${roId}/resources/`);
-  if (!resp.ok) return [];
+  if (!resp.ok) {
+    return [];
+  }
   const data = await resp.json();
   const results = data.results ?? data;
   return (Array.isArray(results) ? results : []).map(
@@ -198,6 +203,6 @@ async function fetchResources(roId: string): Promise<Resource[]> {
       identifier: r.identifier,
       type: r.type,
       url: r.url,
-    }),
+    })
   );
 }

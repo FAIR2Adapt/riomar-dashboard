@@ -76,7 +76,12 @@ const applyParams = (paramString: string) => {
 };
 
 const onHashChange = async () => {
-  console.log("[HashGlobeView] onHashChange called, hash:", location.hash, "ready:", ready.value);
+  console.log(
+    "[HashGlobeView] onHashChange called, hash:",
+    location.hash,
+    "ready:",
+    ready.value
+  );
   if (location.hash.length > 1) {
     urlParameterStore.$reset();
     // The hash is of the form "#resource::param1=value1::param2=value2::..."
@@ -87,7 +92,12 @@ const onHashChange = async () => {
 
     applyParams(paramString);
 
-    console.log("[HashGlobeView] resource:", resource, "isROCrate:", resource ? isROCratePID(resource) : false);
+    console.log(
+      "[HashGlobeView] resource:",
+      resource,
+      "isROCrate:",
+      resource ? isROCratePID(resource) : false
+    );
     // Check if the resource is an RO-Crate PID — if so, resolve the dataset URL
     if (resource && isROCratePID(resource)) {
       resolving.value = true;
