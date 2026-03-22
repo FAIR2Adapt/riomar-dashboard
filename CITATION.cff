@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "RiOMar Dashboard"
+abstract: "WebGL-based interactive globe viewer for FAIR Digital Objects, supporting HEALPix DGGS, curvilinear, and other grid types from cloud-hosted Zarr datasets."
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/FAIR2Adapt/riomar-dashboard"
+url: "https://fair2adapt.github.io/riomar-dashboard/"
+authors:
+  - family-names: Kölling
+    given-names: Tobias
+    affiliation: "Max Planck Institute for Meteorology"
+  - family-names: Fouilloux
+    given-names: Anne
+    affiliation: "Lifewatch ERIC"
+    orcid: "https://orcid.org/0000-0002-1784-2920"
+keywords:
+  - visualization
+  - HEALPix
+  - DGGS
+  - Zarr
+  - WebGL
+  - FAIR
+  - RO-Crate
+  - ocean data
+  - climate

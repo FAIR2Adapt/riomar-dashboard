@@ -1,63 +1,73 @@
-# gridlook
+# RiOMar Dashboard
 
-GridLook is a WebGL-based viewer for Earth system model (ESM) output. It supports cloud-hosted Zarr datasets.
+WebGL-based interactive globe viewer for FAIR Digital Objects, built on [GridLook](https://github.com/observingClouds/gridlook). Part of the [FAIR2Adapt](https://fair2adapt-eosc.eu) project.
+
+Supports HEALPix DGGS (including multiscale pyramids), curvilinear, regular, triangular, Gaussian reduced, and irregular grids from cloud-hosted Zarr datasets.
 
 ![](docs/assets/showcase.webp)
 
+## Features
+
+- **Multiple grid types**: HEALPix, curvilinear, regular, triangular, Gaussian reduced, irregular
+- **Token authentication**: access private datasets via `::token=` URL parameter
+- **RO-Crate resolution**: paste an RO-Crate PID to auto-discover and load the dataset
+- **Interactive controls**: colormaps, bounds, projections, time/dimension slicing
+- **MapLibre basemaps**: OSM, EMODNET bathymetry, satellite
+
 ## Try It Live
 
-Try out the example dataset:
+**Dashboard**: https://fair2adapt.github.io/riomar-dashboard/
 
-https://gridlook.pages.dev
+**With FDO2map**: https://fair2adapt.github.io/FDO2map/ — paste an RO-Crate PID to resolve and visualize
 
-You can view any CORS-enabled, public Zarr dataset with GridLook:
+### Example datasets
 
 ```
-https://gridlook.pages.dev/#<ZARR_URI>
+# RiOMAR ocean model (HEALPix)
+https://fair2adapt.github.io/riomar-dashboard/#https://pangeo-eosc-minioapi.vm.fedcloud.eu/afouilloux-riomar/small_hp_pyramid.zarr
+
+# Sentinel-2 reflectance (HEALPix multiscale pyramid)
+https://fair2adapt.github.io/riomar-dashboard/#https://pangeo-eosc-minioapi.vm.fedcloud.eu/afouilloux-dggs/sentinel_bbox_l20_pyramid.zarr
+
+# Private dataset with API key
+https://fair2adapt.github.io/riomar-dashboard/#https://fair2adapt.duckdns.org/bucket/dataset.zarr::token=YOUR_API_KEY
 ```
 
-## Project Setup
+## URL format
 
-This project uses [Node.js](https://nodejs.org/en) and [vue.js](https://vuejs.org/)
+```
+https://fair2adapt.github.io/riomar-dashboard/#<ZARR_URL>::param1=value1::param2=value2
+```
 
-```sh
+| Parameter | Description |
+|-----------|-------------|
+| `token` | API key for authenticated proxy |
+| `varname` | Variable to display |
+| `colormap` | Colormap name |
+| `boundlow` / `boundhigh` | Color scale bounds |
+
+## Development
+
+Requires [Node.js](https://nodejs.org/) (v18+).
+
+```bash
 npm install
+npm run dev        # Dev server on localhost:5173
+npm run build      # Production build
+npm run typecheck  # Type checking
+npm run lint       # Linting
 ```
 
-### Compile and Hot-Reload for Development
+## Deployment
 
-```sh
-npm run dev
-```
+The dashboard is deployed as a static site on GitHub Pages via the `deploy.yml` workflow.
 
-### Type-Check, Compile and Minify for Production
+To deploy elsewhere, run `npm run build` and serve the `dist/` directory.
 
-```sh
-npm run build
-```
+## Acknowledgements
 
-### Lint with [ESLint](https://eslint.org/)
+Based on [GridLook](https://github.com/observingClouds/gridlook) by Tobias Kölling and contributors. Extended with RO-Crate resolution, token authentication, and MapLibre basemaps for the FAIR2Adapt project.
 
-```sh
-npm run lint
-```
+## License
 
-### Customize configuration
-
-See [Vite Configuration Reference](https://vitejs.dev/config/).
-
-## Usage
-
-The project is served at http://localhost:3000/ when you run `npm run dev`.
-
-## CORS & Hosting Notes
-
-To load datasets from services like DKRZ Swift, ensure [CORS](https://developer.mozilla.org/de/docs/Web/HTTP/Guides/CORS) is enabled on the server.
-
-Example for the nextGEMS container on Swift:
-
-```
-swift post nextGEMS -m "X-Container-Meta-Access-Control-Allow-Origin:*"
-```
-
-This allows GridLook to fetch data directly from the container in your browser.
+[MIT](LICENSE)

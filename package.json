@@ -1,6 +1,13 @@
 {
   "name": "riomar-dashboard",
   "version": "0.1.0",
+  "description": "WebGL-based interactive globe viewer for FAIR Digital Objects, supporting HEALPix DGGS, curvilinear, and other grid types from cloud-hosted Zarr datasets.",
+  "license": "MIT",
+  "homepage": "https://fair2adapt.github.io/riomar-dashboard/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FAIR2Adapt/riomar-dashboard.git"
+  },
   "scripts": {
     "dev": "vite --port 3000",
     "build": "vue-tsc -b && vite build",

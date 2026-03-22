@@ -1,0 +1,30 @@
+[
+  {
+    "title": "Add LICENSE file",
+    "body": "MIT License added. Original GridLook authors credited."
+  },
+  {
+    "title": "Add CITATION.cff",
+    "body": "Citation metadata for the software, following CFF format."
+  },
+  {
+    "title": "Add CONTRIBUTING.md",
+    "body": "Contribution guidelines for new developers."
+  },
+  {
+    "title": "Generate codemeta.json with SOMEF",
+    "body": "Run the generate-codemeta workflow to auto-generate codemeta.json from the repository metadata."
+  },
+  {
+    "title": "Run RSFC FAIR assessment",
+    "body": "Run the fair_assessment workflow to evaluate software FAIRness and generate RSFC_REPORT.md."
+  },
+  {
+    "title": "Update package.json metadata",
+    "body": "Add description, license, homepage, and repository fields to package.json."
+  },
+  {
+    "title": "Update README.md",
+    "body": "Document features, usage, URL format, and acknowledge GridLook origins."
+  }
+]

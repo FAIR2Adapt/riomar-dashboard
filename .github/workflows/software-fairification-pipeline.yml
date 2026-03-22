@@ -1,0 +1,113 @@
+name: Software FAIRification Pipeline
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - project-items.json
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure Project exists and add items
+        env:
+          GH_TOKEN: ${{ secrets.FAIRIFICATION || github.token }}
+          PROJECT_TITLE: "FAIRification pipeline"
+          ITEMS_FILE: "project-items.json"
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "GH_TOKEN is set? -> ${GH_TOKEN:+yes}"
+          echo $OWNER
+          
+          set -euo pipefail
+
+          if [ ! -f "$ITEMS_FILE" ]; then
+            echo "Items file not found: $ITEMS_FILE"
+            exit 1
+          fi
+
+          echo "Looking up owner ID for: $OWNER"
+          echo "Looking up owner ID for: $OWNER"
+
+          OWNER_ID=$(gh api graphql -f query='
+            query($login:String!) {
+              repositoryOwner(login:$login) {
+                id
+                login
+              }
+            }' \
+            -F login="$OWNER" \
+            --jq '.data.repositoryOwner.id')
+          
+          if [ -z "$OWNER_ID" ] || [ "$OWNER_ID" = "null" ]; then
+            echo "Could not resolve owner ID for $OWNER"
+            exit 1
+          fi
+          echo "Searching for Project titled: $PROJECT_TITLE"
+          PROJECT_ID=$(gh api graphql -f query='
+            query($login:String!) {
+              repositoryOwner(login:$login) {
+                ... on User {
+                  projectsV2(first:100) { nodes { id title } }
+                }
+                ... on Organization {
+                  projectsV2(first:100) { nodes { id title } }
+                }
+              }
+            }' -F login="$OWNER" \
+            --jq '
+              (
+                (.data.repositoryOwner.projectsV2.nodes // [])
+              )
+              | map(select(.title == env.PROJECT_TITLE))
+              | .[0].id // empty
+            ')
+          if [ -z "${PROJECT_ID:-}" ]; then
+            echo "Project not found. Creating it..."
+            PROJECT_ID=$(gh api graphql -f query='
+              mutation($ownerId:ID!, $title:String!) {
+                createProjectV2(input:{ownerId:$ownerId, title:$title}) {
+                  projectV2 { id title }
+                }
+              }' \
+              -F ownerId="$OWNER_ID" -F title="$PROJECT_TITLE" \
+              --jq '.data.createProjectV2.projectV2.id')
+            echo "Created Project ID: $PROJECT_ID"
+          else
+            echo "Found Project ID: $PROJECT_ID"
+          fi
+
+          echo "Adding items from $ITEMS_FILE..."
+          COUNT=$(jq length "$ITEMS_FILE")
+          echo "Items: $COUNT"
+
+          for i in $(seq 0 $((COUNT-1))); do
+            TITLE=$(jq -r ".[$i].title" "$ITEMS_FILE")
+            BODY=$(jq -r ".[$i].body // \"\"" "$ITEMS_FILE")
+
+            if [ -z "$TITLE" ] || [ "$TITLE" = "null" ]; then
+              echo "Skipping item $i: missing title"
+              continue
+            fi
+
+            echo "Creating draft item: $TITLE"
+            gh api graphql -f query='
+              mutation($projectId:ID!, $title:String!, $body:String!) {
+                addProjectV2DraftIssue(input:{
+                  projectId:$projectId,
+                  title:$title,
+                  body:$body
+                }) { item { id } }
+              }' \
+              -F projectId="$PROJECT_ID" \
+              -F title="$TITLE" \
+              -F body="$BODY" >/dev/null
+          done
+
+          echo "Done."
