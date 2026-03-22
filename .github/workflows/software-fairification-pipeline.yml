@@ -88,7 +88,7 @@ jobs:
                   projectId:$projectId,
                   title:$title,
                   body:$body
-                }) { item { id } }
+                }) { projectItem { id } }
               }' \
               -F projectId="$PROJECT_ID" \
               -F title="$TITLE" \
