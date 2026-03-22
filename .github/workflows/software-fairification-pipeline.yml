@@ -30,11 +30,14 @@ jobs:
             exit 1
           fi
 
+          OWNER_LOGIN="${REPO%/*}"
+          REPO_NAME="${REPO#*/}"
+
           # Get repository and owner node IDs
           REPO_ID=$(gh api "repos/$REPO" --jq '.node_id')
           OWNER_ID=$(gh api "repos/$REPO" --jq '.owner.node_id')
-          echo "Repository ID: $REPO_ID"
-          echo "Owner ID: $OWNER_ID"
+          echo "Repository: $REPO"
+          echo "Owner: $OWNER_LOGIN"
 
           # Search for existing repo-level project
           PROJECT_ID=$(gh api graphql -f query='
@@ -43,12 +46,12 @@ jobs:
                 projectsV2(first:50) { nodes { id title } }
               }
             }' \
-            -F owner="${REPO%/*}" -F name="${REPO#*/}" \
+            -F owner="$OWNER_LOGIN" -F name="$REPO_NAME" \
             --jq "
               .data.repository.projectsV2.nodes
               | map(select(.title == \"$PROJECT_TITLE\"))
               | .[0].id // empty
-            ")
+            " 2>/dev/null || true)
 
           if [ -z "${PROJECT_ID:-}" ]; then
             echo "Project not found. Creating at repository level..."
