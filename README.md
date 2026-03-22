@@ -50,12 +50,19 @@ https://fair2adapt.github.io/riomar-dashboard/#<ZARR_URL>::param1=value1::param2
 | `colormap` | Colormap name |
 | `boundlow` / `boundhigh` | Color scale bounds |
 
-## Development
+## Installation
 
-Requires [Node.js](https://nodejs.org/) (v18+).
+Requires [Node.js](https://nodejs.org/) (v18+) and [npm](https://www.npmjs.com/).
 
 ```bash
+git clone https://github.com/FAIR2Adapt/riomar-dashboard.git
+cd riomar-dashboard
 npm install
+```
+
+## Development
+
+```bash
 npm run dev        # Dev server on localhost:5173
 npm run build      # Production build
 npm run typecheck  # Type checking
