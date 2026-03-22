@@ -1,14 +1,7 @@
 /**
  * Resolve an RO-Crate PID to a Zarr dataset URL via the ROHub API.
- *
- * When the dashboard receives a URL like:
- *   #https://w3id.org/ro-id/fdc1c071-76d7-44df-a565-8217ebcc59fe
- *
- * This module:
- * 1. Detects it's an RO-Crate PID (not a direct Zarr URL)
- * 2. Queries ROHub annotations to find a schema:ViewAction with a schema:urlTemplate
- * 3. Resolves the dataset URL from the linked resource
- * 4. Returns the Zarr dataset URL for the dashboard to load
+ * Also extracts structured metadata (I-ADOPT variables, claims, coverage)
+ * for display in the dashboard.
  */
 
 const RO_ID_PREFIX = "https://w3id.org/ro-id/";
@@ -20,6 +13,22 @@ const VIEW_ACTION = "https://schema.org/ViewAction";
 const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const URL_TEMPLATE = "https://schema.org/urlTemplate";
 const SCHEMA_OBJECT = "https://schema.org/object";
+const SCHEMA_NAME = "https://schema.org/name";
+const SCHEMA_TEXT = "https://schema.org/text";
+const SCHEMA_VARIABLE = "https://schema.org/variableMeasured";
+const SCHEMA_CLAIM = "https://schema.org/Claim";
+const SCHEMA_HAS_CLAIM = "https://schema.org/hasClaim";
+const IADOPT_PROPERTY = "https://w3id.org/iadopt/ont/hasProperty";
+const IADOPT_OOI = "https://w3id.org/iadopt/ont/hasObjectOfInterest";
+const IADOPT_MATRIX = "https://w3id.org/iadopt/ont/hasMatrix";
+const SCHEMA_URL = "https://schema.org/url";
+const SCHEMA_TEMPORAL = "https://schema.org/temporalCoverage";
+const SCHEMA_SPATIAL = "https://schema.org/spatialCoverage";
+const SCHEMA_LICENSE = "https://schema.org/license";
+const SCHEMA_IDENTIFIER = "https://schema.org/identifier";
+const DCTERMS_REFERENCED = "http://purl.org/dc/terms/isReferencedBy";
+const SPATIAL_RESOLUTION =
+  "http://data.europa.eu/930/spatialResolutionAsText";
 
 interface Triple {
   subject: string;
@@ -34,7 +43,37 @@ interface Annotation {
 interface Resource {
   identifier: string;
   type: string;
+  name: string;
   url: string;
+}
+
+export interface IADOPTVariable {
+  name: string;
+  property?: string;
+  propertyURI?: string;
+  objectOfInterest?: string;
+  objectOfInterestURI?: string;
+  matrix?: string;
+}
+
+export interface AIDAClaim {
+  text: string;
+  nanopubURI?: string;
+}
+
+export interface ROCrateMetadata {
+  pid: string;
+  title: string;
+  description: string;
+  datasetUrl: string | null;
+  variables: IADOPTVariable[];
+  claims: AIDAClaim[];
+  temporalCoverage?: string;
+  spatialCoverage?: string;
+  spatialResolution?: string;
+  license?: string;
+  identifier?: string;
+  nanopubResources: Resource[];
 }
 
 /**
@@ -52,157 +91,248 @@ function extractROId(pid: string): string {
 }
 
 /**
- * Fetch all triples from a single annotation.
+ * Fetch all pages from a paginated API endpoint.
  */
-async function fetchAnnotationTriples(annotationId: string): Promise<Triple[]> {
-  const triples: Triple[] = [];
-  let nextUrl: string | null = `${ROHUB_API}annotations/${annotationId}/body/`;
+async function fetchAllPages<T>(url: string): Promise<T[]> {
+  const results: T[] = [];
+  let nextUrl: string | null = url;
 
   while (nextUrl) {
     const resp: Response = await fetch(nextUrl);
     if (!resp.ok) {
-      return triples;
+      return results;
     }
-    const data: { results?: Triple[]; next?: string } = await resp.json();
-    const results = data.results ?? [];
-    for (const r of results) {
-      triples.push({
-        subject: r.subject,
-        predicate: r.predicate,
-        object: r.object,
-      });
-    }
+    const data = await resp.json();
+    const items = data.results ?? (Array.isArray(data) ? data : []);
+    results.push(...items);
     nextUrl = data.next ?? null;
   }
-  return triples;
+  return results;
 }
 
 /**
- * Resolve an RO-Crate PID to a Zarr dataset URL.
- *
- * Discovery logic:
- * 1. List all annotations on the RO
- * 2. Collect all triples, looking for a ViewAction with a urlTemplate
- * 3. Follow schema:object to find the linked dataset resource
- * 4. Resolve the resource's actual URL from the resource list
- * 5. If no ViewAction found, fall back to the first Dataset resource
+ * Helper: find object value for a given subject + predicate.
  */
-export async function resolveROCrate(pid: string): Promise<string | null> {
+function getObject(
+  triples: Triple[],
+  subject: string,
+  predicate: string
+): string | undefined {
+  return triples.find((t) => t.subject === subject && t.predicate === predicate)
+    ?.object;
+}
+
+/**
+ * Helper: find all object values for a given subject + predicate.
+ */
+function getObjects(
+  triples: Triple[],
+  subject: string,
+  predicate: string
+): string[] {
+  return triples
+    .filter((t) => t.subject === subject && t.predicate === predicate)
+    .map((t) => t.object);
+}
+
+/**
+ * Resolve an RO-Crate PID to a dataset URL and structured metadata.
+ */
+export async function resolveROCrateWithMetadata(
+  pid: string
+): Promise<ROCrateMetadata> {
   const roId = extractROId(pid);
   console.log(`[RO-Crate] Resolving ${pid} (id: ${roId})`);
 
-  // Fetch annotations list (paginated response with results array)
-  const annotResp = await fetch(`${ROHUB_API}ros/${roId}/annotations/`);
-  if (!annotResp.ok) {
-    console.error(
-      `[RO-Crate] Failed to fetch annotations: ${annotResp.status}`
-    );
-    return null;
-  }
-  const annotData = await annotResp.json();
-  const annotations: Annotation[] = annotData.results ?? annotData;
+  const metadata: ROCrateMetadata = {
+    pid,
+    title: "",
+    description: "",
+    datasetUrl: null,
+    variables: [],
+    claims: [],
+    nanopubResources: [],
+  };
 
-  // Collect all triples from all annotations
+  // Fetch RO basic info
+  try {
+    const roResp = await fetch(`${ROHUB_API}ros/${roId}/`);
+    if (roResp.ok) {
+      const roData = await roResp.json();
+      metadata.title = roData.title ?? "";
+      metadata.description = roData.description ?? "";
+    }
+  } catch {
+    // Continue without basic info
+  }
+
+  // Fetch annotations
+  const annotations = await fetchAllPages<Annotation>(
+    `${ROHUB_API}ros/${roId}/annotations/`
+  );
+
+  // Collect all triples
   const allTriples: Triple[] = [];
   for (const annot of annotations) {
-    const triples = await fetchAnnotationTriples(annot.identifier);
+    const triples = await fetchAllPages<Triple>(
+      `${ROHUB_API}annotations/${annot.identifier}/body/`
+    );
     allTriples.push(...triples);
   }
   console.log(`[RO-Crate] Found ${allTriples.length} triples`);
 
-  // Find ViewAction via potentialAction
-  const actionTriple = allTriples.find((t) => t.predicate === POTENTIAL_ACTION);
+  // Fetch resources
+  const resources = await fetchAllPages<Record<string, string>>(
+    `${ROHUB_API}ros/${roId}/resources/`
+  );
+  const typedResources: Resource[] = resources.map((r) => ({
+    identifier: r.identifier,
+    type: r.type,
+    name: r.name,
+    url: r.url,
+  }));
 
+  // Find nanopub resources (Bibliographic Resources with sciencelive URLs)
+  metadata.nanopubResources = typedResources.filter(
+    (r) =>
+      r.type === "Bibliographic Resource" &&
+      r.url?.includes("sciencelive")
+  );
+
+  // --- Resolve dataset URL via ViewAction ---
+  const actionTriple = allTriples.find(
+    (t) => t.predicate === POTENTIAL_ACTION
+  );
   if (actionTriple) {
     const actionId = actionTriple.object;
-
-    // Verify it's a ViewAction
     const typeTriple = allTriples.find(
       (t) => t.subject === actionId && t.predicate === RDF_TYPE
     );
     if (typeTriple?.object === VIEW_ACTION) {
-      // Get the dataset resource URI from schema:object
       const objectTriple = allTriples.find(
         (t) => t.subject === actionId && t.predicate === SCHEMA_OBJECT
       );
-
       if (objectTriple) {
-        // Resolve the resource URI to an actual URL
-        const datasetUrl = await resolveResourceUrl(roId, objectTriple.object);
-        if (datasetUrl) {
-          console.log(
-            `[RO-Crate] Resolved dataset via ViewAction: ${datasetUrl}`
-          );
-          return datasetUrl;
+        const resourceId = objectTriple.object.replace(/\/$/, "").split("/").pop()!;
+        const match = typedResources.find((r) => r.identifier === resourceId);
+        if (match?.url) {
+          metadata.datasetUrl = match.url;
         }
-      }
-
-      // If schema:object resolution failed, check for urlTemplate
-      const templateTriple = allTriples.find(
-        (t) => t.subject === actionId && t.predicate === URL_TEMPLATE
-      );
-      if (templateTriple) {
-        console.log(`[RO-Crate] Found urlTemplate: ${templateTriple.object}`);
       }
     }
   }
 
-  // Fallback: find the first Dataset resource
+  // Fallback: find Dataset resource
+  if (!metadata.datasetUrl) {
+    const dataset = typedResources.find((r) => r.type === "Dataset");
+    if (dataset?.url) {
+      metadata.datasetUrl = dataset.url;
+    }
+  }
+
+  // --- Extract I-ADOPT variables ---
+  const variableIds = new Set<string>();
+  for (const t of allTriples) {
+    if (t.predicate === SCHEMA_VARIABLE) {
+      variableIds.add(t.object);
+    }
+  }
+
+  for (const varId of variableIds) {
+    const name = getObject(allTriples, varId, SCHEMA_NAME);
+    if (!name) {
+      continue;
+    }
+
+    const propId = getObject(allTriples, varId, IADOPT_PROPERTY);
+    const ooiId = getObject(allTriples, varId, IADOPT_OOI);
+    const matrixId = getObject(allTriples, varId, IADOPT_MATRIX);
+
+    const variable: IADOPTVariable = { name };
+
+    if (propId) {
+      variable.property = getObject(allTriples, propId, SCHEMA_NAME);
+      variable.propertyURI = getObject(allTriples, propId, SCHEMA_URL);
+    }
+    if (ooiId) {
+      variable.objectOfInterest = getObject(allTriples, ooiId, SCHEMA_NAME);
+      variable.objectOfInterestURI = getObject(allTriples, ooiId, SCHEMA_URL);
+    }
+    if (matrixId) {
+      variable.matrix = getObject(allTriples, matrixId, SCHEMA_NAME);
+    }
+
+    metadata.variables.push(variable);
+  }
+
+  // --- Extract claims ---
+  const claimIds = new Set<string>();
+  for (const t of allTriples) {
+    if (t.predicate === SCHEMA_HAS_CLAIM) {
+      claimIds.add(t.object);
+    }
+  }
+  // Also find claims by type
+  for (const t of allTriples) {
+    if (t.predicate === RDF_TYPE && t.object === SCHEMA_CLAIM) {
+      claimIds.add(t.subject);
+    }
+  }
+
+  for (const claimId of claimIds) {
+    const text = getObject(allTriples, claimId, SCHEMA_TEXT);
+    if (!text) {
+      continue;
+    }
+    const nanopubURI = getObject(allTriples, claimId, DCTERMS_REFERENCED);
+    metadata.claims.push({ text, nanopubURI });
+  }
+
+  // --- Extract coverage and metadata ---
+  // Search across all subjects for these predicates
+  for (const t of allTriples) {
+    if (t.predicate === SCHEMA_TEMPORAL && !metadata.temporalCoverage) {
+      metadata.temporalCoverage = t.object;
+    }
+    if (t.predicate === SPATIAL_RESOLUTION && !t.object.startsWith("http")) {
+      metadata.spatialResolution = t.object;
+    }
+    if (t.predicate === SCHEMA_LICENSE && !metadata.license) {
+      metadata.license = t.object;
+    }
+    if (t.predicate === SCHEMA_IDENTIFIER && !metadata.identifier) {
+      metadata.identifier = t.object;
+    }
+  }
+
+  // Spatial coverage: find Place entities linked via spatialCoverage
+  for (const t of allTriples) {
+    if (t.predicate === SCHEMA_SPATIAL) {
+      // Check if the object is a Place entity with a name
+      const placeName = getObject(allTriples, t.object, SCHEMA_NAME);
+      if (placeName) {
+        metadata.spatialCoverage = placeName;
+        break;
+      }
+      // Or it might be a plain text value
+      if (!t.object.startsWith("http")) {
+        metadata.spatialCoverage = t.object;
+        break;
+      }
+    }
+  }
+
   console.log(
-    "[RO-Crate] No ViewAction found, falling back to Dataset resource"
+    `[RO-Crate] Metadata: ${metadata.variables.length} variables, ${metadata.claims.length} claims`
   );
-  return await findDatasetResource(roId);
+
+  return metadata;
 }
 
 /**
- * Resolve a resource URI to its actual URL via the ROHub resource list.
+ * Resolve an RO-Crate PID to just the dataset URL (backward compatible).
  */
-async function resolveResourceUrl(
-  roId: string,
-  resourceUri: string
-): Promise<string | null> {
-  const resourceId = resourceUri.replace(/\/$/, "").split("/").pop()!;
-  const resources = await fetchResources(roId);
-
-  // Try exact match by ID
-  const match = resources.find((r) => r.identifier === resourceId);
-  if (match?.url) {
-    return match.url;
-  }
-
-  // Fallback: find Dataset by type
-  const dataset = resources.find((r) => r.type === "Dataset");
-  return dataset?.url ?? null;
-}
-
-/**
- * Find the first Dataset resource in an RO.
- */
-async function findDatasetResource(roId: string): Promise<string | null> {
-  const resources = await fetchResources(roId);
-  const dataset = resources.find((r) => r.type === "Dataset");
-  if (dataset?.url) {
-    console.log(`[RO-Crate] Found Dataset resource: ${dataset.url}`);
-    return dataset.url;
-  }
-  return null;
-}
-
-/**
- * Fetch the resource list for an RO.
- */
-async function fetchResources(roId: string): Promise<Resource[]> {
-  const resp = await fetch(`${ROHUB_API}ros/${roId}/resources/`);
-  if (!resp.ok) {
-    return [];
-  }
-  const data = await resp.json();
-  const results = data.results ?? data;
-  return (Array.isArray(results) ? results : []).map(
-    (r: Record<string, string>) => ({
-      identifier: r.identifier,
-      type: r.type,
-      url: r.url,
-    })
-  );
+export async function resolveROCrate(pid: string): Promise<string | null> {
+  const metadata = await resolveROCrateWithMetadata(pid);
+  return metadata.datasetUrl;
 }

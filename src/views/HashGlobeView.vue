@@ -4,10 +4,15 @@ import { storeToRefs } from "pinia";
 import { ref, onBeforeMount, type Ref } from "vue";
 
 import GlobeView from "./GlobeView.vue";
+import MetadataPanel from "@/ui/MetadataPanel.vue";
 
 import { setAuthToken } from "@/lib/data/authStore";
 import { GRID_TYPES, type T_GRID_TYPES } from "@/lib/data/gridTypeDetector";
-import { isROCratePID, resolveROCrate } from "@/lib/data/rocrateResolver";
+import {
+  isROCratePID,
+  resolveROCrateWithMetadata,
+  type ROCrateMetadata,
+} from "@/lib/data/rocrateResolver";
 import { STORE_PARAM_MAPPING, useUrlParameterStore } from "@/store/paramStore";
 import { useGlobeControlStore } from "@/store/store";
 import type { TURLParameterValues } from "@/utils/urlParams";
@@ -22,6 +27,7 @@ const src = ref("");
 const resolving = ref(true);
 const ready = ref(false);
 const params: Ref<TParams> = ref({});
+const crateMetadata: Ref<ROCrateMetadata | null> = ref(null);
 
 const store = useGlobeControlStore();
 const { userBoundsLow, userBoundsHigh } = storeToRefs(store);
@@ -76,49 +82,64 @@ const applyParams = (paramString: string) => {
 };
 
 const onHashChange = async () => {
-  console.log(
-    "[HashGlobeView] onHashChange called, hash:",
-    location.hash,
-    "ready:",
-    ready.value
-  );
   if (location.hash.length > 1) {
     urlParameterStore.$reset();
-    // The hash is of the form "#resource::param1=value1::param2=value2::..."
-    // We split on "::" to separate the resource from the parameters
-    // and then parse the parameters and set the store values accordingly
     const [resource, ...paramArray] = location.hash.substring(1).split("::");
     const paramString = paramArray.join("&");
 
     applyParams(paramString);
 
-    console.log(
-      "[HashGlobeView] resource:",
-      resource,
-      "isROCrate:",
-      resource ? isROCratePID(resource) : false
-    );
-    // Check if the resource is an RO-Crate PID — if so, resolve the dataset URL
+    // Check if the resource is an RO-Crate PID
     if (resource && isROCratePID(resource)) {
       resolving.value = true;
       ready.value = false;
+      crateMetadata.value = null;
       try {
-        const datasetUrl = await resolveROCrate(resource);
-        src.value = datasetUrl || defaultSrc.value;
+        // Quick resolve: just get the dataset URL to start the map fast
+        const roId = resource
+          .replace("https://w3id.org/ro-id/", "")
+          .replace(/\/$/, "");
+        const roResp = await fetch(
+          `https://api.rohub.org/api/ros/${roId}/resources/`
+        );
+        if (roResp.ok) {
+          const data = await roResp.json();
+          const resources = data.results ?? data;
+          const dataset = resources.find(
+            (r: Record<string, string>) => r.type === "Dataset"
+          );
+          if (dataset?.url) {
+            src.value = dataset.url;
+          }
+        }
+        if (!src.value) {
+          src.value = defaultSrc.value;
+        }
       } catch (e) {
-        console.error("[RO-Crate] Resolution failed:", e);
+        console.error("[RO-Crate] Quick resolve failed:", e);
         src.value = defaultSrc.value;
       } finally {
         resolving.value = false;
         ready.value = true;
       }
+
+      // Load full metadata in background (doesn't block the map)
+      resolveROCrateWithMetadata(resource)
+        .then((metadata) => {
+          crateMetadata.value = metadata;
+        })
+        .catch((e) => {
+          console.error("[RO-Crate] Metadata loading failed:", e);
+        });
     } else {
       src.value = resource || defaultSrc.value;
+      crateMetadata.value = null;
       resolving.value = false;
       ready.value = true;
     }
   } else {
     src.value = defaultSrc.value;
+    crateMetadata.value = null;
     resolving.value = false;
     ready.value = true;
   }
@@ -136,7 +157,10 @@ onBeforeMount(() => {
     <span v-if="resolving">Resolving RO-Crate dataset...</span>
     <span v-else>Loading...</span>
   </div>
-  <GlobeView v-else :src="src" />
+  <template v-else>
+    <GlobeView :src="src" />
+    <MetadataPanel v-if="crateMetadata" :metadata="crateMetadata" />
+  </template>
 </template>
 
 <style scoped>
