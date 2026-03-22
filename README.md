@@ -3,6 +3,7 @@
 <!-- QUALITY_BADGE_START -->
 [![Software quality](https://img.shields.io/badge/FAIRness-55%25-orange "score: 55% | passed: 22 | failed: 18 | errors: 1")](RSFC_REPORT.md)
 <!-- QUALITY_BADGE_END -->
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19163889.svg)](https://doi.org/10.5281/zenodo.19163889)
 
 WebGL-based interactive globe viewer for FAIR Digital Objects, built on [GridLook](https://github.com/observingClouds/gridlook). Part of the [FAIR2Adapt](https://fair2adapt-eosc.eu) project.
 

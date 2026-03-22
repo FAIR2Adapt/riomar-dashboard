@@ -5,7 +5,11 @@ title: "RiOMar Dashboard"
 abstract: "WebGL-based interactive globe viewer for FAIR Digital Objects, supporting HEALPix DGGS, curvilinear, and other grid types from cloud-hosted Zarr datasets."
 version: 0.1.0
 license: MIT
+doi: "10.5281/zenodo.19163889"
 repository-code: "https://github.com/FAIR2Adapt/riomar-dashboard"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.19163889"
 url: "https://fair2adapt.github.io/riomar-dashboard/"
 authors:
   - family-names: Kölling
