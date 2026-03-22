@@ -158,14 +158,15 @@ export async function resolveROCrateWithMetadata(
     `${ROHUB_API}ros/${roId}/annotations/`
   );
 
-  // Collect all triples
-  const allTriples: Triple[] = [];
-  for (const annot of annotations) {
-    const triples = await fetchAllPages<Triple>(
-      `${ROHUB_API}annotations/${annot.identifier}/body/`
-    );
-    allTriples.push(...triples);
-  }
+  // Collect triples from all annotations in parallel
+  const tripleArrays = await Promise.all(
+    annotations.map((annot) =>
+      fetchAllPages<Triple>(`${ROHUB_API}annotations/${annot.identifier}/body/`)
+    )
+  );
+  const allTriples: Triple[] = tripleArrays
+    .filter((arr) => arr.length < 200) // Skip huge enrichment annotations
+    .flat();
   console.log(`[RO-Crate] Found ${allTriples.length} triples`);
 
   // Fetch resources
