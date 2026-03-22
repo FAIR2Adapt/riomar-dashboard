@@ -30,9 +30,11 @@ jobs:
             exit 1
           fi
 
-          # Get repository node ID
+          # Get repository and owner node IDs
           REPO_ID=$(gh api "repos/$REPO" --jq '.node_id')
+          OWNER_ID=$(gh api "repos/$REPO" --jq '.owner.node_id')
           echo "Repository ID: $REPO_ID"
+          echo "Owner ID: $OWNER_ID"
 
           # Search for existing repo-level project
           PROJECT_ID=$(gh api graphql -f query='
@@ -56,7 +58,7 @@ jobs:
                   projectV2 { id title }
                 }
               }' \
-              -F ownerId="$REPO_ID" -F repoId="$REPO_ID" -F title="$PROJECT_TITLE" \
+              -F ownerId="$OWNER_ID" -F repoId="$REPO_ID" -F title="$PROJECT_TITLE" \
               --jq '.data.createProjectV2.projectV2.id')
             echo "Created Project: $PROJECT_ID"
           else
