@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  repository-projects: write
 
 jobs:
   sync:
@@ -20,11 +21,8 @@ jobs:
           GH_TOKEN: ${{ secrets.FAIRIFICATION || github.token }}
           PROJECT_TITLE: "FAIRification pipeline"
           ITEMS_FILE: "project-items.json"
-          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
         run: |
-          echo "GH_TOKEN is set? -> ${GH_TOKEN:+yes}"
-          echo $OWNER
-          
           set -euo pipefail
 
           if [ ! -f "$ITEMS_FILE" ]; then
@@ -32,55 +30,37 @@ jobs:
             exit 1
           fi
 
-          echo "Looking up owner ID for: $OWNER"
-          echo "Looking up owner ID for: $OWNER"
+          # Get repository node ID
+          REPO_ID=$(gh api "repos/$REPO" --jq '.node_id')
+          echo "Repository ID: $REPO_ID"
 
-          OWNER_ID=$(gh api graphql -f query='
-            query($login:String!) {
-              repositoryOwner(login:$login) {
-                id
-                login
+          # Search for existing repo-level project
+          PROJECT_ID=$(gh api graphql -f query='
+            query($owner:String!, $name:String!) {
+              repository(owner:$owner, name:$name) {
+                projectsV2(first:50) { nodes { id title } }
               }
             }' \
-            -F login="$OWNER" \
-            --jq '.data.repositoryOwner.id')
-          
-          if [ -z "$OWNER_ID" ] || [ "$OWNER_ID" = "null" ]; then
-            echo "Could not resolve owner ID for $OWNER"
-            exit 1
-          fi
-          echo "Searching for Project titled: $PROJECT_TITLE"
-          PROJECT_ID=$(gh api graphql -f query='
-            query($login:String!) {
-              repositoryOwner(login:$login) {
-                ... on User {
-                  projectsV2(first:100) { nodes { id title } }
-                }
-                ... on Organization {
-                  projectsV2(first:100) { nodes { id title } }
-                }
-              }
-            }' -F login="$OWNER" \
-            --jq '
-              (
-                (.data.repositoryOwner.projectsV2.nodes // [])
-              )
-              | map(select(.title == env.PROJECT_TITLE))
+            -F owner="${REPO%/*}" -F name="${REPO#*/}" \
+            --jq "
+              .data.repository.projectsV2.nodes
+              | map(select(.title == \"$PROJECT_TITLE\"))
               | .[0].id // empty
-            ')
+            ")
+
           if [ -z "${PROJECT_ID:-}" ]; then
-            echo "Project not found. Creating it..."
+            echo "Project not found. Creating at repository level..."
             PROJECT_ID=$(gh api graphql -f query='
-              mutation($ownerId:ID!, $title:String!) {
-                createProjectV2(input:{ownerId:$ownerId, title:$title}) {
+              mutation($ownerId:ID!, $repoId:ID!, $title:String!) {
+                createProjectV2(input:{ownerId:$ownerId, title:$title, repositoryId:$repoId}) {
                   projectV2 { id title }
                 }
               }' \
-              -F ownerId="$OWNER_ID" -F title="$PROJECT_TITLE" \
+              -F ownerId="$REPO_ID" -F repoId="$REPO_ID" -F title="$PROJECT_TITLE" \
               --jq '.data.createProjectV2.projectV2.id')
-            echo "Created Project ID: $PROJECT_ID"
+            echo "Created Project: $PROJECT_ID"
           else
-            echo "Found Project ID: $PROJECT_ID"
+            echo "Found Project: $PROJECT_ID"
           fi
 
           echo "Adding items from $ITEMS_FILE..."
