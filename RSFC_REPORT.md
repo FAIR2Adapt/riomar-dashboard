@@ -6,7 +6,7 @@ An automated assessment of the riomar-dashboard tool based on the EVERSE softwar
 
 - **Software:** riomar-dashboard
 - **Repository:** https://github.com/FAIR2Adapt/riomar-dashboard
-- **Assessment date:** 2026-03-22T17:21:19Z
+- **Assessment date:** 2026-03-22T17:33:31Z
 - **Total checks:** 41
 
 ## Summary
