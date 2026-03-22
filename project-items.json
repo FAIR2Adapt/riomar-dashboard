@@ -1,35 +1,15 @@
 [
   {
-    "title": "Create a GitHub release (v0.1.0)",
-    "body": "RSFC-03-1/2/3/4: No releases found. Create a tagged release following semver (e.g., v0.1.0) to pass 5 RSFC checks at once."
-  },
-  {
-    "title": "Register persistent identifier (DOI via Zenodo)",
-    "body": "RSFC-01-1/2/3, RSFC-07-1/2: No persistent identifier found. Enable Zenodo-GitHub integration and create a release to get a DOI. Add the DOI to CITATION.cff and README."
-  },
-  {
-    "title": "Archive in Software Heritage",
-    "body": "RSFC-08-1: Not archived in Software Heritage or Zenodo. Submit to https://archive.softwareheritage.org/save/ or enable via Zenodo."
-  },
-  {
-    "title": "Add repostatus badge to README",
-    "body": "RSFC-05-1: No repostatus badge found. Add a badge from https://www.repostatus.org/ (e.g., Active or WIP) to the README."
-  },
-  {
     "title": "Add contact/support metadata",
     "body": "RSFC-05-2: No contact or support information found. Add a support email or link to Issues in README or codemeta.json."
   },
   {
     "title": "Declare contributors in codemeta.json",
-    "body": "RSFC-06-2: Contributors not declared. Update codemeta.json to list contributors (auto-generate by re-running the CodeMeta workflow after adding contributor info)."
+    "body": "RSFC-06-2: Contributors not declared. Update codemeta.json to list contributors."
   },
   {
     "title": "Improve descriptive metadata",
     "body": "RSFC-04-4: Software descriptive metadata incomplete. Ensure codemeta.json has keywords, programming language, operating system, and application category."
-  },
-  {
-    "title": "Add installation instructions to README",
-    "body": "RSFC-13-2: No installation instructions detected. The README has 'npm install' under Development but SOMEF may not detect it. Add a dedicated '## Installation' section."
   },
   {
     "title": "Add tests",
