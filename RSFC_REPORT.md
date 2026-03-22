@@ -6,13 +6,13 @@ An automated assessment of the riomar-dashboard tool based on the EVERSE softwar
 
 - **Software:** riomar-dashboard
 - **Repository:** https://github.com/FAIR2Adapt/riomar-dashboard
-- **Assessment date:** 2026-03-22T17:12:34Z
+- **Assessment date:** 2026-03-22T17:21:19Z
 - **Total checks:** 41
 
 ## Summary
 
-- **Passed (`true`)**: 32
-- **Failed (`false`)**: 9
+- **Passed (`true`)**: 33
+- **Failed (`false`)**: 8
 - **Errors (`error`)**: 0
 
 ## Results Table
@@ -96,10 +96,10 @@ An automated assessment of the riomar-dashboard tool based on the EVERSE softwar
       <td>There is a codemeta file</td>
       <td><a href="#descriptive_metadata-https--w3idorg-rsfc-test-rsfc-04-5">true</a></td>
     </tr>
-    <tr style="background-color: #f8d7da;">
+    <tr style="background-color: #d4edda;">
       <td>https://w3id.org/rsfc/test/RSFC-05-1</td>
       <td>There is a repostatus badge</td>
-      <td><a href="#version_control_use-https--w3idorg-rsfc-test-rsfc-05-1">false</a></td>
+      <td><a href="#version_control_use-https--w3idorg-rsfc-test-rsfc-05-1">true</a></td>
     </tr>
     <tr style="background-color: #f8d7da;">
       <td>https://w3id.org/rsfc/test/RSFC-05-2</td>
@@ -591,10 +591,10 @@ An automated assessment of the riomar-dashboard tool based on the EVERSE softwar
 #### There is a repostatus badge
 
 - **Test ID:** https://w3id.org/rsfc/test/RSFC-05-1
-- **Result:** false
+- **Result:** true
 - **Process:** Searches for a repo status badge in the README file of the repository
-- **Evidence:** Could not find a repo status badge in the repository
-- **Suggestions:** You should include the state of your repository in the README file
+- **Evidence:** A repo status badge was found in the repository
+- **Suggestions:** No suggestions
 
 <a id="version_control_use-https--w3idorg-rsfc-test-rsfc-09-1"></a>
 #### Repository is from Github/Gitlab

@@ -1,7 +1,7 @@
 # RiOMar Dashboard
 
 <!-- QUALITY_BADGE_START -->
-[![Software quality](https://img.shields.io/badge/FAIRness-78%25-green "score: 78% | passed: 32 | failed: 9 | errors: 0")](RSFC_REPORT.md)
+[![Software quality](https://img.shields.io/badge/FAIRness-80%25-green "score: 80% | passed: 33 | failed: 8 | errors: 0")](RSFC_REPORT.md)
 <!-- QUALITY_BADGE_END -->
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19163889.svg)](https://doi.org/10.5281/zenodo.19163889)
 [![Project Status: Active](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
