@@ -8,7 +8,7 @@ on:
 
 permissions:
   contents: read
-  repository-projects: write
+  issues: write
 
 jobs:
   sync:
@@ -16,12 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Ensure Project exists and add items
+      - name: Create issues from project-items.json
         env:
           GH_TOKEN: ${{ secrets.FAIRIFICATION || github.token }}
-          PROJECT_TITLE: "FAIRification pipeline"
           ITEMS_FILE: "project-items.json"
           REPO: ${{ github.repository }}
+          LABEL: "fairification"
         run: |
           set -euo pipefail
 
@@ -30,69 +30,42 @@ jobs:
             exit 1
           fi
 
-          OWNER_LOGIN="${REPO%/*}"
-          REPO_NAME="${REPO#*/}"
+          # Create label if it doesn't exist
+          gh label create "$LABEL" --repo "$REPO" \
+            --description "FAIR compliance improvement" \
+            --color "0e8a16" 2>/dev/null || true
 
-          # Get repository and owner node IDs
-          REPO_ID=$(gh api "repos/$REPO" --jq '.node_id')
-          OWNER_ID=$(gh api "repos/$REPO" --jq '.owner.node_id')
-          echo "Repository: $REPO"
-          echo "Owner: $OWNER_LOGIN"
+          # Get existing open issue titles with this label
+          EXISTING=$(gh issue list --repo "$REPO" --label "$LABEL" --state open --json title --jq '.[].title')
 
-          # Search for existing repo-level project
-          PROJECT_ID=$(gh api graphql -f query='
-            query($owner:String!, $name:String!) {
-              repository(owner:$owner, name:$name) {
-                projectsV2(first:50) { nodes { id title } }
-              }
-            }' \
-            -F owner="$OWNER_LOGIN" -F name="$REPO_NAME" \
-            --jq "
-              .data.repository.projectsV2.nodes
-              | map(select(.title == \"$PROJECT_TITLE\"))
-              | .[0].id // empty
-            " 2>/dev/null || true)
-
-          if [ -z "${PROJECT_ID:-}" ]; then
-            echo "Project not found. Creating at repository level..."
-            PROJECT_ID=$(gh api graphql -f query='
-              mutation($ownerId:ID!, $repoId:ID!, $title:String!) {
-                createProjectV2(input:{ownerId:$ownerId, title:$title, repositoryId:$repoId}) {
-                  projectV2 { id title }
-                }
-              }' \
-              -F ownerId="$OWNER_ID" -F repoId="$REPO_ID" -F title="$PROJECT_TITLE" \
-              --jq '.data.createProjectV2.projectV2.id')
-            echo "Created Project: $PROJECT_ID"
-          else
-            echo "Found Project: $PROJECT_ID"
-          fi
-
-          echo "Adding items from $ITEMS_FILE..."
           COUNT=$(jq length "$ITEMS_FILE")
-          echo "Items: $COUNT"
+          echo "Processing $COUNT items..."
+
+          CREATED=0
+          SKIPPED=0
 
           for i in $(seq 0 $((COUNT-1))); do
             TITLE=$(jq -r ".[$i].title" "$ITEMS_FILE")
             BODY=$(jq -r ".[$i].body // \"\"" "$ITEMS_FILE")
 
             if [ -z "$TITLE" ] || [ "$TITLE" = "null" ]; then
-              echo "Skipping item $i: missing title"
               continue
             fi
 
-            echo "Creating draft item: $TITLE"
-            gh api graphql -f query='
-              mutation($projectId:ID!, $title:String!, $body:String!) {
-                addProjectV2DraftIssue(input:{
-                  projectId:$projectId,
-                  title:$title,
-                  body:$body
-                }) { projectItem { id } }
-              }' \
-              -F projectId="$PROJECT_ID" \
-              -F title="$TITLE" \
-              -F body="$BODY" >/dev/null
+            # Skip if issue already exists
+            if echo "$EXISTING" | grep -qF "$TITLE"; then
+              echo "  Exists: $TITLE"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            gh issue create --repo "$REPO" \
+              --title "$TITLE" \
+              --body "$BODY" \
+              --label "$LABEL"
+            echo "  Created: $TITLE"
+            CREATED=$((CREATED + 1))
           done
 
-          echo "Done."
+          echo ""
+          echo "Done: $CREATED created, $SKIPPED already existed"
