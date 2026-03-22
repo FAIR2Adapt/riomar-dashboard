@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import { ref } from "vue";
+
 import type { ROCrateMetadata } from "@/lib/data/rocrateResolver";
 
 defineProps<{
@@ -25,7 +26,12 @@ const isOpen = ref(true);
       <h2 class="panel-title">{{ metadata.title }}</h2>
 
       <div v-if="metadata.pid" class="section">
-        <a :href="metadata.pid" target="_blank" class="pid-link">
+        <a
+          :href="metadata.pid"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="pid-link"
+        >
           {{ metadata.pid }}
         </a>
       </div>
@@ -47,6 +53,7 @@ const isOpen = ref(true);
                   v-if="v.propertyURI"
                   :href="v.propertyURI"
                   target="_blank"
+                  rel="noopener noreferrer"
                   >{{ v.property }}</a
                 >
                 <span v-else>{{ v.property }}</span>
@@ -59,6 +66,7 @@ const isOpen = ref(true);
                   v-if="v.objectOfInterestURI"
                   :href="v.objectOfInterestURI"
                   target="_blank"
+                  rel="noopener noreferrer"
                   >{{ v.objectOfInterest }}</a
                 >
                 <span v-else>{{ v.objectOfInterest }}</span>
@@ -99,16 +107,13 @@ const isOpen = ref(true);
       <!-- Claims -->
       <div v-if="metadata.claims.length > 0" class="section">
         <h3>Claims</h3>
-        <div
-          v-for="(c, i) in metadata.claims"
-          :key="i"
-          class="claim"
-        >
+        <div v-for="(c, i) in metadata.claims" :key="i" class="claim">
           <p>{{ c.text }}</p>
           <a
             v-if="c.nanopubURI"
             :href="c.nanopubURI"
             target="_blank"
+            rel="noopener noreferrer"
             class="nanopub-link"
             >nanopub</a
           >
@@ -118,7 +123,7 @@ const isOpen = ref(true);
       <!-- License -->
       <div v-if="metadata.license" class="section">
         <h3>License</h3>
-        <a :href="metadata.license" target="_blank">{{
+        <a :href="metadata.license" target="_blank" rel="noopener noreferrer">{{
           metadata.license.includes("creativecommons")
             ? "CC-BY 4.0"
             : metadata.license

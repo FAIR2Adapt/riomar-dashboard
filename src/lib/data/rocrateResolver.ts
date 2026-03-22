@@ -11,7 +11,7 @@ const ROHUB_API = "https://api.rohub.org/api/";
 const POTENTIAL_ACTION = "https://schema.org/potentialAction";
 const VIEW_ACTION = "https://schema.org/ViewAction";
 const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const URL_TEMPLATE = "https://schema.org/urlTemplate";
+// const URL_TEMPLATE = "https://schema.org/urlTemplate";
 const SCHEMA_OBJECT = "https://schema.org/object";
 const SCHEMA_NAME = "https://schema.org/name";
 const SCHEMA_TEXT = "https://schema.org/text";
@@ -27,8 +27,7 @@ const SCHEMA_SPATIAL = "https://schema.org/spatialCoverage";
 const SCHEMA_LICENSE = "https://schema.org/license";
 const SCHEMA_IDENTIFIER = "https://schema.org/identifier";
 const DCTERMS_REFERENCED = "http://purl.org/dc/terms/isReferencedBy";
-const SPATIAL_RESOLUTION =
-  "http://data.europa.eu/930/spatialResolutionAsText";
+const SPATIAL_RESOLUTION = "http://data.europa.eu/930/spatialResolutionAsText";
 
 interface Triple {
   subject: string;
@@ -123,21 +122,9 @@ function getObject(
 }
 
 /**
- * Helper: find all object values for a given subject + predicate.
- */
-function getObjects(
-  triples: Triple[],
-  subject: string,
-  predicate: string
-): string[] {
-  return triples
-    .filter((t) => t.subject === subject && t.predicate === predicate)
-    .map((t) => t.object);
-}
-
-/**
  * Resolve an RO-Crate PID to a dataset URL and structured metadata.
  */
+// eslint-disable-next-line max-lines-per-function
 export async function resolveROCrateWithMetadata(
   pid: string
 ): Promise<ROCrateMetadata> {
@@ -194,15 +181,11 @@ export async function resolveROCrateWithMetadata(
 
   // Find nanopub resources (Bibliographic Resources with sciencelive URLs)
   metadata.nanopubResources = typedResources.filter(
-    (r) =>
-      r.type === "Bibliographic Resource" &&
-      r.url?.includes("sciencelive")
+    (r) => r.type === "Bibliographic Resource" && r.url?.includes("sciencelive")
   );
 
   // --- Resolve dataset URL via ViewAction ---
-  const actionTriple = allTriples.find(
-    (t) => t.predicate === POTENTIAL_ACTION
-  );
+  const actionTriple = allTriples.find((t) => t.predicate === POTENTIAL_ACTION);
   if (actionTriple) {
     const actionId = actionTriple.object;
     const typeTriple = allTriples.find(
@@ -213,7 +196,10 @@ export async function resolveROCrateWithMetadata(
         (t) => t.subject === actionId && t.predicate === SCHEMA_OBJECT
       );
       if (objectTriple) {
-        const resourceId = objectTriple.object.replace(/\/$/, "").split("/").pop()!;
+        const resourceId = objectTriple.object
+          .replace(/\/$/, "")
+          .split("/")
+          .pop()!;
         const match = typedResources.find((r) => r.identifier === resourceId);
         if (match?.url) {
           metadata.datasetUrl = match.url;

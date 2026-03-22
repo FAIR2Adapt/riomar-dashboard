@@ -4,7 +4,6 @@ import { storeToRefs } from "pinia";
 import { ref, onBeforeMount, type Ref } from "vue";
 
 import GlobeView from "./GlobeView.vue";
-import MetadataPanel from "@/ui/MetadataPanel.vue";
 
 import { setAuthToken } from "@/lib/data/authStore";
 import { GRID_TYPES, type T_GRID_TYPES } from "@/lib/data/gridTypeDetector";
@@ -15,6 +14,7 @@ import {
 } from "@/lib/data/rocrateResolver";
 import { STORE_PARAM_MAPPING, useUrlParameterStore } from "@/store/paramStore";
 import { useGlobeControlStore } from "@/store/store";
+import MetadataPanel from "@/ui/MetadataPanel.vue";
 import type { TURLParameterValues } from "@/utils/urlParams";
 
 type TParams = Partial<Record<TURLParameterValues, string>>;
@@ -81,6 +81,7 @@ const applyParams = (paramString: string) => {
   }
 };
 
+// eslint-disable-next-line max-lines-per-function
 const onHashChange = async () => {
   if (location.hash.length > 1) {
     urlParameterStore.$reset();
@@ -127,6 +128,7 @@ const onHashChange = async () => {
       resolveROCrateWithMetadata(resource)
         .then((metadata) => {
           crateMetadata.value = metadata;
+          return metadata;
         })
         .catch((e) => {
           console.error("[RO-Crate] Metadata loading failed:", e);
