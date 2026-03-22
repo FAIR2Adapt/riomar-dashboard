@@ -6,13 +6,13 @@ An automated assessment of the riomar-dashboard tool based on the EVERSE softwar
 
 - **Software:** riomar-dashboard
 - **Repository:** https://github.com/FAIR2Adapt/riomar-dashboard
-- **Assessment date:** 2026-03-22T16:02:25Z
+- **Assessment date:** 2026-03-22T17:03:24Z
 - **Total checks:** 41
 
 ## Summary
 
-- **Passed (`true`)**: 21
-- **Failed (`false`)**: 19
+- **Passed (`true`)**: 22
+- **Failed (`false`)**: 18
 - **Errors (`error`)**: 1
 
 ## Results Table
@@ -161,10 +161,10 @@ An automated assessment of the riomar-dashboard tool based on the EVERSE softwar
       <td>Dependencies are declared</td>
       <td><a href="#requirements_specified-https--w3idorg-rsfc-test-rsfc-13-1">true</a></td>
     </tr>
-    <tr style="background-color: #f8d7da;">
+    <tr style="background-color: #d4edda;">
       <td>https://w3id.org/rsfc/test/RSFC-13-2</td>
       <td>There are installation instructions</td>
-      <td><a href="#software_has_documentation-https--w3idorg-rsfc-test-rsfc-13-2">false</a></td>
+      <td><a href="#software_has_documentation-https--w3idorg-rsfc-test-rsfc-13-2">true</a></td>
     </tr>
     <tr style="background-color: #d4edda;">
       <td>https://w3id.org/rsfc/test/RSFC-13-3</td>
@@ -525,10 +525,10 @@ An automated assessment of the riomar-dashboard tool based on the EVERSE softwar
 #### There are installation instructions
 
 - **Test ID:** https://w3id.org/rsfc/test/RSFC-13-2
-- **Result:** false
+- **Result:** true
 - **Process:** Searches for installation instructions in the README file of the repository
-- **Evidence:** Could not find any installation instructions in the repository
-- **Suggestions:** You should include instructions to facilitate the use of your software. More information at https://everse.software/RSQKit/creating_good_readme
+- **Evidence:** Installation instructions were found in the repository
+- **Suggestions:** No suggestions
 
 ### software_has_license
 
