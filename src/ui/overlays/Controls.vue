@@ -13,18 +13,29 @@ import ProjectionControls from "./controls/ProjectionControls.vue";
 import VariableSelector from "./controls/VariableSelector.vue";
 
 // Import control components
+import { GRID_TYPES, type T_GRID_TYPES } from "@/lib/data/gridTypeDetector";
 import { clamp, type TProjectionType } from "@/lib/projection/projectionUtils";
 import type { TBounds, TModelInfo } from "@/lib/types/GlobeTypes";
 import { useUrlParameterStore } from "@/store/paramStore";
 import { useGlobeControlStore } from "@/store/store";
 import { MOBILE_BREAKPOINT } from "@/ui/common/viewConstants";
 
-const props = defineProps<{ modelInfo?: TModelInfo; currentSource: string }>();
+const props = defineProps<{
+  modelInfo?: TModelInfo;
+  currentSource: string;
+  gridType?: T_GRID_TYPES;
+}>();
 
 defineEmits<{
   onSnapshot: [];
   onRotate: [];
 }>();
+
+// The HEALPix renderer is a 2D MapLibre map, so the 3D-globe-only controls
+// (projection, land/sea mask, coastlines) have no effect there — hide them.
+const showGlobeOnlyControls = computed(
+  () => props.gridType !== GRID_TYPES.HEALPIX
+);
 
 // Bounds management types
 const BOUND_MODES = {
@@ -331,8 +342,8 @@ onMounted(() => {
           @update:auto-colormap="autoColormap = $event"
           @force-user-bounds="pickedBoundsMode = BOUND_MODES.USER"
         />
-        <ProjectionControls />
-        <MaskControls />
+        <ProjectionControls v-if="showGlobeOnlyControls" />
+        <MaskControls v-if="showGlobeOnlyControls" />
         <ActionControls
           @on-snapshot="() => $emit('onSnapshot')"
           @on-rotate="() => $emit('onRotate')"

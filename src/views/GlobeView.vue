@@ -233,6 +233,7 @@ onMounted(async () => {
       :key="globeControlKey"
       :model-info="modelInfo"
       :current-source="props.src"
+      :grid-type="detectedGridType"
       @on-snapshot="makeSnapshot"
       @on-rotate="toggleRotate"
     />
