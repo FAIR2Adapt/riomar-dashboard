@@ -23,6 +23,8 @@ import {
 import {
   HISTOGRAM_SUMMARY_BINS,
   buildHistogramSummary,
+  mergeHistogramSummaries,
+  rebinHistogramSummary,
   type THistogramSummary,
 } from "@/utils/histogram.ts";
 import { useLog } from "@/utils/logging.ts";
@@ -41,6 +43,7 @@ const {
   varinfo,
   colormap,
   invertColormap,
+  posterizeLevels,
   selection,
 } = storeToRefs(store);
 
@@ -64,6 +67,12 @@ let lastDataMax = 0;
 let lastMissingValue = HEALPIX_UNSEEN;
 let lastFillValue = HEALPIX_UNSEEN;
 
+// Number of bars shown in the distribution plot (matches useSharedGridLogic).
+const DISPLAY_BIN_COUNT = 50;
+// High-resolution summary of the last fetched slice, kept so the selection-range
+// histogram can be re-binned on bounds/posterize changes without refetching.
+let lastHistogramSummary: THistogramSummary | null = null;
+
 watch(
   () => varnameSelector.value,
   () => getData()
@@ -73,6 +82,14 @@ watch(
 watch(
   [() => colormap.value, () => invertColormap.value, () => selection.value],
   () => recolor(),
+  { deep: true }
+);
+
+// Re-bin the selection-range histogram when the bounds or posterize level change
+// (no refetch — the cached summary covers the full data range).
+watch(
+  [() => selection.value, () => posterizeLevels.value],
+  () => recomputeSelectionHistogram(selection.value.low, selection.value.high),
   { deep: true }
 );
 
@@ -324,6 +341,7 @@ async function getData(updateMode: TUpdateMode = UPDATE_MODE.INITIAL_LOAD) {
       fillValue,
       missingValue
     );
+    updateHistogram([histSummary], min, max);
     updateVarInfo(
       datavar,
       [histSummary],
@@ -384,6 +402,53 @@ async function updateVarInfo(
     indices as number[],
     updateMode
   );
+}
+
+// Re-bin the cached summary over the current selection range. Mirrors the
+// selection-range logic in useSharedGridLogic so ColorBar's overlay matches.
+function recomputeSelectionHistogram(low?: number, high?: number) {
+  if (
+    !lastHistogramSummary ||
+    low === undefined ||
+    high === undefined ||
+    !isFinite(low) ||
+    !isFinite(high)
+  ) {
+    store.updateHistogram(undefined);
+    return;
+  }
+  const binCount =
+    posterizeLevels.value > 1 ? posterizeLevels.value : DISPLAY_BIN_COUNT;
+  store.updateHistogram(
+    rebinHistogramSummary(lastHistogramSummary, binCount, low, high)
+  );
+}
+
+// Populate the distribution plot from the loaded (visible) tiles. The
+// full-range histogram is fixed over [min, max]; the selection-range histogram
+// tracks the current bounds.
+function updateHistogram(
+  summaries: THistogramSummary[],
+  min: number,
+  max: number
+) {
+  if (!summaries.length || !isFinite(min) || !isFinite(max)) {
+    store.updateHistogram(undefined);
+    store.updateFullHistogram(undefined);
+    lastHistogramSummary = null;
+    return;
+  }
+  const summary = mergeHistogramSummaries(
+    summaries,
+    min,
+    max,
+    HISTOGRAM_SUMMARY_BINS
+  );
+  lastHistogramSummary = summary;
+  store.updateFullHistogram(
+    rebinHistogramSummary(summary, DISPLAY_BIN_COUNT, min, max)
+  );
+  recomputeSelectionHistogram(selection.value.low, selection.value.high);
 }
 
 const selectedBasemap = ref("osm");
