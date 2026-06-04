@@ -527,6 +527,8 @@ onMounted(() => {
     style: BASEMAP_STYLES.osm,
     center: [-3, 46],
     zoom: 5,
+    // Keep the WebGL drawing buffer so makeSnapshot() can read pixels from it.
+    canvasContextAttributes: { preserveDrawingBuffer: true },
   });
 
   map.on("load", () => {
@@ -558,7 +560,27 @@ onBeforeUnmount(() => {
 });
 
 function makeSnapshot() {
-  // Not implemented for MapLibre yet
+  if (!map) {
+    return;
+  }
+  // Force a synchronous render so the preserved drawing buffer is current,
+  // then read the composited canvas (basemap + HEALPix layer).
+  map.redraw();
+  map.getCanvas().toBlob((blob) => {
+    if (!blob) {
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.download = "gridlook.png";
+    link.href = url;
+    // Safari downloads the blob asynchronously and needs the anchor in the DOM;
+    // revoking the object URL too early leaves a stuck 0 KB ".download" file.
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }, "image/png");
 }
 
 function toggleRotate() {

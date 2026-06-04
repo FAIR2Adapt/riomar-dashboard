@@ -665,13 +665,19 @@ export function useGridScene(options: UseGridSceneOptions) {
   function makeSnapshot() {
     render();
     canvas.value?.toBlob((blob) => {
+      if (!blob) {
+        return;
+      }
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.download = "gridlook.png";
-
-      link.href = URL.createObjectURL(blob!);
+      link.href = url;
+      // Safari downloads the blob asynchronously and needs the anchor in the
+      // DOM; revoking the object URL too early leaves a stuck 0 KB file.
+      document.body.appendChild(link);
       link.click();
-
-      URL.revokeObjectURL(link.href);
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
     }, "image/png");
   }
 
