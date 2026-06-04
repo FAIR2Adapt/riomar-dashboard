@@ -12,6 +12,7 @@ import { useGridDataAccess } from "./composables/useGridDataAccess.ts";
 import { buildDimensionRangesAndIndices } from "@/lib/data/dimensionHandling.ts";
 import { ZarrDataManager } from "@/lib/data/ZarrDataManager.ts";
 import { getDataBounds } from "@/lib/data/zarrUtils.ts";
+import { getColormapLut } from "@/lib/shaders/colormapLut.ts";
 import type { TDimensionRange, TSources } from "@/lib/types/GlobeTypes.ts";
 import { useUrlParameterStore } from "@/store/paramStore.ts";
 import {
@@ -29,26 +30,19 @@ import { useLog } from "@/utils/logging.ts";
 const props = defineProps<{ datasources?: TSources }>();
 
 const HEALPIX_UNSEEN = -1.6375e30;
-
-// Colormap: RdYlBu reversed
-const COLORMAP = [
-  [0.647, 0.0, 0.149],
-  [0.843, 0.188, 0.153],
-  [0.957, 0.427, 0.263],
-  [0.992, 0.682, 0.38],
-  [0.996, 0.878, 0.565],
-  [1.0, 1.0, 0.749],
-  [0.878, 0.953, 0.973],
-  [0.671, 0.851, 0.914],
-  [0.455, 0.678, 0.82],
-  [0.271, 0.459, 0.706],
-  [0.192, 0.212, 0.584],
-];
+const FALLBACK_COLOR = "rgb(128,128,128)";
 
 const store = useGlobeControlStore();
 const { logError } = useLog();
-const { varnameSelector, dimSlidersValues, isInitializingVariable, varinfo } =
-  storeToRefs(store);
+const {
+  varnameSelector,
+  dimSlidersValues,
+  isInitializingVariable,
+  varinfo,
+  colormap,
+  invertColormap,
+  selection,
+} = storeToRefs(store);
 
 const urlParameterStore = useUrlParameterStore();
 const { paramDimIndices, paramDimMinBounds, paramDimMaxBounds } =
@@ -62,9 +56,24 @@ let map: maplibregl.Map | undefined;
 let cellIds: number[] = [];
 let nside = 0;
 
+// Cache of the last fetched slice so colormap/bounds changes can re-color the
+// existing GeoJSON without refetching from the store.
+let lastValues: Float32Array | null = null;
+let lastDataMin = 0;
+let lastDataMax = 0;
+let lastMissingValue = HEALPIX_UNSEEN;
+let lastFillValue = HEALPIX_UNSEEN;
+
 watch(
   () => varnameSelector.value,
   () => getData()
+);
+
+// Re-color (no refetch) when the colormap, inversion, or min/max range changes.
+watch(
+  [() => colormap.value, () => invertColormap.value, () => selection.value],
+  () => recolor(),
+  { deep: true }
 );
 
 watch(
@@ -98,19 +107,37 @@ function cellToPolygon(cellId: number): number[][] {
   ];
 }
 
-function valueToColor(val: number, min: number, max: number): string {
+function valueToColor(
+  val: number,
+  low: number,
+  high: number,
+  lut: Uint8ClampedArray | null,
+  invert: boolean
+): string {
   if (isNaN(val)) {
     return "rgba(0,0,0,0)";
   }
-  const t = Math.max(0, Math.min(1, (val - min) / (max - min || 1)));
-  const idx = t * (COLORMAP.length - 1);
-  const lo = Math.floor(idx);
-  const hi = Math.min(lo + 1, COLORMAP.length - 1);
-  const f = idx - lo;
-  const r = Math.round((COLORMAP[lo][0] * (1 - f) + COLORMAP[hi][0] * f) * 255);
-  const g = Math.round((COLORMAP[lo][1] * (1 - f) + COLORMAP[hi][1] * f) * 255);
-  const b = Math.round((COLORMAP[lo][2] * (1 - f) + COLORMAP[hi][2] * f) * 255);
-  return `rgb(${r},${g},${b})`;
+  let t = high > low ? (val - low) / (high - low) : 0.5;
+  t = Math.max(0, Math.min(1, t));
+  if (invert) {
+    t = 1 - t;
+  }
+  if (!lut) {
+    return FALLBACK_COLOR;
+  }
+  const idx = Math.round(t * 255) * 3;
+  return `rgb(${lut[idx]},${lut[idx + 1]},${lut[idx + 2]})`;
+}
+
+// Color range from the store selection (set by the min/max sliders), falling
+// back to the data range when no selection is set yet.
+function getColorRange(dataMin: number, dataMax: number) {
+  const sel = selection.value;
+  const hasSel =
+    sel && "low" in sel && "high" in sel && (sel.low !== 0 || sel.high !== 0);
+  return hasSel
+    ? { low: sel.low as number, high: sel.high as number }
+    : { low: dataMin, high: dataMax };
 }
 
 async function getCells(): Promise<number[] | undefined> {
@@ -161,11 +188,14 @@ async function datasourceUpdate() {
 
 function buildGeoJSON(
   values: Float32Array,
-  min: number,
-  max: number,
+  dataMin: number,
+  dataMax: number,
   missingValue: number,
   fillValue: number
 ) {
+  const { low, high } = getColorRange(dataMin, dataMax);
+  const lut = getColormapLut(colormap.value);
+  const invert = invertColormap.value;
   const features = [];
   for (let i = 0; i < cellIds.length; i++) {
     const v = values[i];
@@ -174,7 +204,7 @@ function buildGeoJSON(
     }
     features.push({
       type: "Feature" as const,
-      properties: { color: valueToColor(v, min, max), value: v },
+      properties: { color: valueToColor(v, low, high, lut, invert), value: v },
       geometry: {
         type: "Polygon" as const,
         coordinates: [cellToPolygon(cellIds[i])],
@@ -182,6 +212,28 @@ function buildGeoJSON(
     });
   }
   return { type: "FeatureCollection" as const, features };
+}
+
+// Rebuild the GeoJSON from the cached slice using the current colormap/range.
+function recolor() {
+  if (!map || !lastValues) {
+    return;
+  }
+  const source = map.getSource("healpix") as
+    | maplibregl.GeoJSONSource
+    | undefined;
+  if (!source) {
+    return;
+  }
+  source.setData(
+    buildGeoJSON(
+      lastValues,
+      lastDataMin,
+      lastDataMax,
+      lastMissingValue,
+      lastFillValue
+    )
+  );
 }
 
 async function fetchSlice(
@@ -238,16 +290,14 @@ async function getData(updateMode: TUpdateMode = UPDATE_MODE.INITIAL_LOAD) {
     if (isNaN(missingValue)) missingValue = HEALPIX_UNSEEN; // eslint-disable-line curly
     if (isNaN(fillValue)) fillValue = HEALPIX_UNSEEN; // eslint-disable-line curly
 
+    // Cache for recolor() so colormap/bounds changes don't refetch.
+    lastValues = values;
+    lastDataMin = min;
+    lastDataMax = max;
+    lastMissingValue = missingValue;
+    lastFillValue = fillValue;
+
     const geojson = buildGeoJSON(values, min, max, missingValue, fillValue);
-    // Debug: log first cell coordinates
-    if (geojson.features.length > 0) {
-      const coords = (geojson.features[0].geometry as GeoJSON.Polygon)
-        .coordinates[0];
-      console.log("First cell coords:", JSON.stringify(coords));
-    }
-    console.log(
-      `MapLibre: ${geojson.features.length} features, range ${min}-${max}`
-    );
     const source = map.getSource("healpix") as maplibregl.GeoJSONSource;
     if (source) {
       source.setData(geojson);
