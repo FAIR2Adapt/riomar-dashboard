@@ -29,6 +29,7 @@ import GridTriangular from "@/ui/grids/Triangular.vue";
 import AboutView from "@/ui/overlays/AboutModal.vue";
 import GlobeControls from "@/ui/overlays/Controls.vue";
 import InfoPanel from "@/ui/overlays/InfoPanel.vue";
+import TimeSeriesPanel from "@/ui/overlays/TimeSeriesPanel.vue";
 import { useLog } from "@/utils/logging";
 
 const props = defineProps<{ src: string }>();
@@ -260,6 +261,12 @@ onMounted(async () => {
       :key="globeKey"
       :datasources="datasources"
       :is-rotated="detectedGridType === GRID_TYPES.REGULAR_ROTATED"
+    />
+    <TimeSeriesPanel
+      v-if="detectedGridType !== undefined && detectedGridType !== GRID_TYPES.ERROR"
+      :datasources="datasources"
+      :model-info="modelInfo"
+      :grid-type="detectedGridType"
     />
     <div class="buttons about-corner-link">
       <InfoPanel

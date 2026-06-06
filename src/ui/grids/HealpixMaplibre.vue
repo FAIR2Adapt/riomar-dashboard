@@ -16,6 +16,7 @@ import { getColormapLut } from "@/lib/shaders/colormapLut.ts";
 import type { TDimensionRange, TSources } from "@/lib/types/GlobeTypes.ts";
 import { useUrlParameterStore } from "@/store/paramStore.ts";
 import {
+  PICK_MODE,
   UPDATE_MODE,
   useGlobeControlStore,
   type TUpdateMode,
@@ -45,6 +46,7 @@ const {
   invertColormap,
   posterizeLevels,
   selection,
+  pickMode,
 } = storeToRefs(store);
 
 const urlParameterStore = useUrlParameterStore();
@@ -58,6 +60,133 @@ const mapContainer = ref<HTMLDivElement>();
 let map: maplibregl.Map | undefined;
 let cellIds: number[] = [];
 let nside = 0;
+
+// --- Map-pick state (location / bounding-box selection for the time series) ---
+let pickMarker: maplibregl.Marker | undefined;
+let bboxStartMarker: maplibregl.Marker | undefined;
+let bboxFirstCorner: { lng: number; lat: number } | null = null;
+
+function clearPickOverlays() {
+  pickMarker?.remove();
+  pickMarker = undefined;
+  bboxStartMarker?.remove();
+  bboxStartMarker = undefined;
+  bboxFirstCorner = null;
+  const src = map?.getSource("pick-bbox") as
+    | maplibregl.GeoJSONSource
+    | undefined;
+  src?.setData({
+    type: "FeatureCollection",
+    features: [],
+  } as GeoJSON.FeatureCollection);
+}
+
+function drawPickBbox(
+  lonMin: number,
+  latMin: number,
+  lonMax: number,
+  latMax: number
+) {
+  const src = map?.getSource("pick-bbox") as
+    | maplibregl.GeoJSONSource
+    | undefined;
+  src?.setData({
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: {},
+        geometry: {
+          type: "Polygon",
+          coordinates: [
+            [
+              [lonMin, latMin],
+              [lonMax, latMin],
+              [lonMax, latMax],
+              [lonMin, latMax],
+              [lonMin, latMin],
+            ],
+          ],
+        },
+      },
+    ],
+  } as GeoJSON.FeatureCollection);
+}
+
+function onMapClick(e: maplibregl.MapMouseEvent) {
+  if (!map || pickMode.value === PICK_MODE.NONE) {
+    return;
+  }
+  const { lng, lat } = e.lngLat;
+
+  if (pickMode.value === PICK_MODE.POINT) {
+    clearPickOverlays();
+    pickMarker = new maplibregl.Marker({ color: "#4a90d9" })
+      .setLngLat([lng, lat])
+      .addTo(map);
+    store.setPickedPoint({ lat, lon: lng });
+    return;
+  }
+
+  // Bounding-box mode: first click sets one corner, second click completes it.
+  if (!bboxFirstCorner) {
+    bboxFirstCorner = { lng, lat };
+    bboxStartMarker = new maplibregl.Marker({ color: "#e8743b" })
+      .setLngLat([lng, lat])
+      .addTo(map);
+    return;
+  }
+  const latMin = Math.min(bboxFirstCorner.lat, lat);
+  const latMax = Math.max(bboxFirstCorner.lat, lat);
+  const lonMin = Math.min(bboxFirstCorner.lng, lng);
+  const lonMax = Math.max(bboxFirstCorner.lng, lng);
+  drawPickBbox(lonMin, latMin, lonMax, latMax);
+  bboxStartMarker?.remove();
+  bboxStartMarker = undefined;
+  bboxFirstCorner = null;
+  store.setPickedBbox({ latMin, latMax, lonMin, lonMax });
+}
+
+function addPickLayers() {
+  if (!map || map.getSource("pick-bbox")) {
+    return;
+  }
+  map.addSource("pick-bbox", {
+    type: "geojson",
+    data: { type: "FeatureCollection", features: [] },
+  });
+  map.addLayer({
+    id: "pick-bbox-fill",
+    type: "fill",
+    source: "pick-bbox",
+    paint: { "fill-color": "#e8743b", "fill-opacity": 0.12 },
+  });
+  map.addLayer({
+    id: "pick-bbox-line",
+    type: "line",
+    source: "pick-bbox",
+    paint: { "line-color": "#e8743b", "line-width": 2 },
+  });
+}
+
+// Update the cursor and reset any in-progress selection when picking starts.
+watch(
+  () => pickMode.value,
+  (mode) => {
+    if (!map) {
+      return;
+    }
+    if (mode === PICK_MODE.NONE) {
+      map.getCanvas().style.cursor = "";
+      bboxStartMarker?.remove();
+      bboxStartMarker = undefined;
+      bboxFirstCorner = null;
+      return;
+    }
+    clearPickOverlays();
+    map.getCanvas().style.cursor = "crosshair";
+  }
+);
 
 // Cache of the last fetched slice so colormap/bounds changes can re-color the
 // existing GeoJSON without refetching from the store.
@@ -516,6 +645,7 @@ function switchBasemap(name: string) {
       source: "healpix",
       paint: { "fill-color": ["get", "color"], "fill-opacity": 0.9 },
     });
+    addPickLayers();
     // Re-render current data
     getData();
   });
@@ -545,14 +675,19 @@ onMounted(() => {
       },
     });
 
+    addPickLayers();
+
     // Load data after map is ready
     if (props.datasources) {
       datasourceUpdate();
     }
   });
+
+  map.on("click", onMapClick);
 });
 
 onBeforeUnmount(() => {
+  clearPickOverlays();
   map?.remove();
   map = undefined;
 });

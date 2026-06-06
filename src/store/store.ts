@@ -21,6 +21,23 @@ export type TUpdateMode = (typeof UPDATE_MODE)[keyof typeof UPDATE_MODE];
 
 export type TCoastlineResolution = "50m" | "10m";
 
+/** Map-pick state shared between the map view and the time-series panel. */
+export const PICK_MODE = {
+  NONE: "",
+  POINT: "point",
+  BBOX: "bbox",
+} as const;
+
+export type TPickMode = (typeof PICK_MODE)[keyof typeof PICK_MODE];
+
+export type TPickedPoint = { lat: number; lon: number };
+export type TPickedBbox = {
+  latMin: number;
+  latMax: number;
+  lonMin: number;
+  lonMax: number;
+};
+
 export const useGlobeControlStore = defineStore("globeControl", {
   state: () => {
     return {
@@ -48,6 +65,10 @@ export const useGlobeControlStore = defineStore("globeControl", {
       controlPanelVisible: true,
       projectionMode: PROJECTION_TYPES.MERCATOR as TProjectionType,
       projectionCenter: { lat: 0, lon: 0 } as TProjectionCenter,
+      // Map-pick state for the time-series panel.
+      pickMode: PICK_MODE.NONE as TPickMode,
+      pickedPoint: null as TPickedPoint | null,
+      pickedBbox: null as TPickedBbox | null,
     };
   },
   actions: {
@@ -112,6 +133,29 @@ export const useGlobeControlStore = defineStore("globeControl", {
     },
     setControlPanelVisible(visible: boolean) {
       this.controlPanelVisible = visible;
+    },
+    startPick(mode: TPickMode) {
+      this.pickMode = mode;
+    },
+    cancelPick() {
+      this.pickMode = PICK_MODE.NONE;
+    },
+    clearPickedPoint() {
+      this.pickedPoint = null;
+    },
+    clearPickedBbox() {
+      this.pickedBbox = null;
+    },
+    setPickedPoint(point: TPickedPoint) {
+      // Only one selection is active at a time.
+      this.pickedBbox = null;
+      this.pickedPoint = point;
+      this.pickMode = PICK_MODE.NONE;
+    },
+    setPickedBbox(bbox: TPickedBbox) {
+      this.pickedPoint = null;
+      this.pickedBbox = bbox;
+      this.pickMode = PICK_MODE.NONE;
     },
   },
 });
