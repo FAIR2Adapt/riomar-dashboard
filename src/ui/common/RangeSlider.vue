@@ -6,6 +6,8 @@ const props = defineProps<{
   high: number;
   min: number;
   max: number;
+  /** Optional muted marker (in the [min, max] domain), e.g. a global position. */
+  marker?: number | null;
 }>();
 
 const emit = defineEmits<{
@@ -39,6 +41,12 @@ const highFraction = computed(() =>
   hasValidRange()
     ? Math.max(0, Math.min(1, (props.high - props.min) / range.value))
     : 1
+);
+
+const markerFraction = computed(() =>
+  props.marker == null || !hasValidRange()
+    ? null
+    : Math.max(0, Math.min(1, (props.marker - props.min) / range.value))
 );
 
 const isPannable = computed(
@@ -224,6 +232,13 @@ defineExpose({
     @pointercancel="onEnd"
     @lostpointercapture="onEnd"
   >
+    <!-- Muted dot marking an external/global position on the track -->
+    <div
+      v-if="markerFraction !== null"
+      class="marker-dot"
+      :style="{ left: `${markerFraction * 100}%` }"
+    ></div>
+
     <!-- Highlighted band between the two handles -->
     <div
       class="selection-band"
@@ -286,6 +301,19 @@ defineExpose({
   background: var(--bulma-border);
   border-radius: var(--bulma-radius);
   pointer-events: none;
+}
+
+.marker-dot {
+  position: absolute;
+  top: 6px;
+  width: 8px;
+  height: 8px;
+  background: var(--bulma-grey);
+  border-radius: 50%;
+  transform: translateX(-50%);
+  opacity: 0.55;
+  pointer-events: none;
+  z-index: 1;
 }
 
 .selection-band {

@@ -25,16 +25,24 @@ export type TRegion =
       lonMax: number;
     };
 
-/** Result of extracting a time series for one variable. */
+/**
+ * Result of extracting a series of one variable along a chosen dimension (time,
+ * depth, …) at a point or averaged over a bounding box.
+ */
 export type TSeriesResult = {
-  /** Time axis as epoch milliseconds. */
-  times: number[];
-  /** One value per time step (null where all sampled cells were missing). */
+  /**
+   * Coordinate value of the varying dimension at each step. For a time
+   * dimension these are epoch milliseconds; otherwise the raw coordinate.
+   */
+  coords: number[];
+  /** One value per step (null where all sampled cells were missing). */
   values: (number | null)[];
   /** Variable units, if known. */
   units?: string;
-  /** Number of grid cells averaged per time step. */
-  cellCount: number;
+  /** Units of the varying dimension (e.g. "m"), if known. */
+  coordUnits?: string;
+  /** Whether the varying dimension is a time axis (coords are epoch ms). */
+  isTime: boolean;
 };
 
 /** Smallest angular distance between two longitudes (degrees), handling wrap. */
@@ -66,12 +74,9 @@ function lonInRange(lon: number, lonMin: number, lonMax: number): boolean {
   return l >= lo || l <= hi;
 }
 
-/**
- * Finds the time dimension. The dimension name is not hardcoded: we pick the
- * first dimension whose name contains "time" (case-insensitive).
- */
-function findTimeAxis(dimNames: string[]): number {
-  return dimNames.findIndex((n) => n.toLowerCase().includes("time"));
+/** A dimension is treated as time if its name contains "time". */
+function isTimeName(name: string): boolean {
+  return name.toLowerCase().includes("time");
 }
 
 /** Reads a 1-D coordinate array, trying the time / variable / grid sources. */
@@ -171,20 +176,21 @@ function indexRange(
 }
 
 /**
- * Averages a fetched chunk over every kept axis except time, producing one
- * value per time step. `keptAxes` lists the original axis indices that survived
- * the selection (i.e. those selected with a slice), in order.
+ * Averages a fetched chunk over every kept axis except the varying axis,
+ * producing one value per step along that axis (time for a series, depth for a
+ * profile). `keptAxes` lists the original axis indices that survived the
+ * selection (i.e. those selected with a slice), in order.
  */
 function averageOverSpace(
   chunk: zarr.Chunk<zarr.DataType>,
   keptAxes: number[],
-  timeAxis: number,
+  varyAxis: number,
   isMissing: (v: number) => boolean
 ): (number | null)[] {
   const data = chunk.data as ArrayLike<number | bigint>;
   const shape = chunk.shape;
   const stride = chunk.stride;
-  const tPos = keptAxes.indexOf(timeAxis);
+  const tPos = keptAxes.indexOf(varyAxis);
   const ntime = shape[tPos];
   const tStride = stride[tPos];
 
@@ -224,68 +230,68 @@ function averageOverSpace(
   return result;
 }
 
-/** Builds the epoch-ms time axis for the inclusive index range [start, end]. */
-async function buildTimeAxis(
-  datasources: TSources,
-  variableSource: { store: string; dataset: string },
-  timeName: string,
-  start: number,
-  end: number
-): Promise<number[]> {
-  const { values, attrs } = await readCoordArray(
-    datasources,
-    variableSource,
-    timeName
-  );
-  const times: number[] = [];
-  const lo = Math.max(0, start);
-  const hi = Math.min(end, values.length - 1);
-  for (let i = lo; i <= hi; i++) {
-    times.push(decodeTime(Number(values[i]), attrs).valueOf());
-  }
-  return times;
-}
-
 /**
- * Loads the full time axis (epoch milliseconds) for a dataset, using `varname`
- * as the reference variable. Used to populate the time-range slider.
+ * Converts a raw coordinate value to its display number: epoch milliseconds for
+ * a time dimension, otherwise the value unchanged.
  */
-export async function loadTimeAxis(
+function coordValue(
+  raw: number,
+  isTime: boolean,
+  attrs: zarr.Attributes
+): number {
+  return isTime ? decodeTime(raw, attrs).valueOf() : raw;
+}
+
+/** The full coordinate axis of one dimension, used to drive the range slider. */
+export type TDimensionAxis = {
+  /** Coordinate values (epoch ms for a time dimension, else raw). */
+  coords: number[];
+  /** Units of the dimension (e.g. "m"), if known. */
+  coordUnits?: string;
+  /** Whether the dimension is a time axis. */
+  isTime: boolean;
+};
+
+/**
+ * Loads the full coordinate axis of `dimName` for the variable `varname`. Used
+ * to populate the range slider and its labels.
+ */
+export async function loadDimensionAxis(
   datasources: TSources,
-  varname: string
-): Promise<number[]> {
+  varname: string,
+  dimName: string
+): Promise<TDimensionAxis> {
   const variableSource = ZarrDataManager.getDatasetSource(datasources, varname);
-  const dimNames = await ZarrDataManager.getDimensionNames(datasources, varname);
-  const timeAxis = findTimeAxis(dimNames);
-  if (timeAxis === -1) {
-    return [];
-  }
+  const isTime = isTimeName(dimName);
   const { values, attrs } = await readCoordArray(
     datasources,
     variableSource,
-    dimNames[timeAxis]
+    dimName
   );
-  const times: number[] = [];
+  const coords: number[] = [];
   for (let i = 0; i < values.length; i++) {
-    times.push(decodeTime(Number(values[i]), attrs).valueOf());
+    coords.push(coordValue(Number(values[i]), isTime, attrs));
   }
-  return times;
+  return { coords, coordUnits: attrs.units as string | undefined, isTime };
 }
 
 /**
- * Sets the non-spatial, non-time dimensions of `selection` to a fixed index,
- * reusing the current slider position (by dimension name) when available.
+ * Sets every dimension of `selection` other than the varying axis and the
+ * spatial axes to a fixed index, reusing the current slider position (by
+ * dimension name) when available. For a time series the varying axis is time
+ * (so e.g. depth is fixed); for a profile the varying axis is depth (so time is
+ * fixed).
  */
 function fixOtherDimensions(
   selection: (number | null | zarr.Slice)[],
   dimNames: string[],
   shape: readonly number[],
   spatialAxes: Set<number>,
-  timeAxis: number,
+  varyAxis: number,
   otherDimSelections: Record<string, number>
 ) {
   for (let i = 0; i < dimNames.length; i++) {
-    if (i === timeAxis || spatialAxes.has(i)) {
+    if (i === varyAxis || spatialAxes.has(i)) {
       continue;
     }
     const requested = otherDimSelections[dimNames[i]];
@@ -297,14 +303,36 @@ function fixOtherDimensions(
   }
 }
 
+/** Determines which axes are spatial (lat/lon, or the HEALPix cell axis). */
+function getSpatialAxes(
+  isHealpix: boolean,
+  dimNames: string[],
+  shapeLength: number
+): Set<number> {
+  const spatialAxes = new Set<number>();
+  if (isHealpix) {
+    spatialAxes.add(shapeLength - 1);
+    return spatialAxes;
+  }
+  const latAxis = dimNames.findIndex((n) => isLatitudeName(n));
+  const lonAxis = dimNames.findIndex((n) => isLongitudeName(n));
+  if (latAxis !== -1) {
+    spatialAxes.add(latAxis);
+  }
+  if (lonAxis !== -1) {
+    spatialAxes.add(lonAxis);
+  }
+  return spatialAxes;
+}
+
 async function extractHealpixSeries(
   datasources: TSources,
   variableSource: { store: string; dataset: string },
   varname: string,
   datavar: zarr.Array<zarr.DataType, zarr.FetchStore>,
   region: TRegion,
-  timeAxis: number,
-  ntime: number,
+  varyAxis: number,
+  nvary: number,
   selection: (number | null | zarr.Slice)[],
   isMissing: (v: number) => boolean
 ): Promise<(number | null)[]> {
@@ -335,7 +363,7 @@ async function extractHealpixSeries(
       datavar,
       selection
     );
-    return averageOverSpace(chunk, [timeAxis], timeAxis, isMissing);
+    return averageOverSpace(chunk, [varyAxis], varyAxis, isMissing);
   }
 
   // Bounding box: collect every cell whose centre falls inside it.
@@ -361,11 +389,13 @@ async function extractHealpixSeries(
     selection
   );
   const data = chunk.data as ArrayLike<number | bigint>;
-  const tPos = [timeAxis, cellAxis].indexOf(timeAxis) === 0 ? 0 : 1;
+  // Only the varying axis and the cell axis survive in the chunk; the cell axis
+  // is last, so the varying axis is always at chunk position 0.
+  const tPos = varyAxis < cellAxis ? 0 : 1;
   const tStride = chunk.stride[tPos];
   const cStride = chunk.stride[tPos === 0 ? 1 : 0];
   const result: (number | null)[] = [];
-  for (let t = 0; t < ntime; t++) {
+  for (let t = 0; t < nvary; t++) {
     let sum = 0;
     let count = 0;
     for (const ci of cellIdxs) {
@@ -385,7 +415,7 @@ async function extractGriddedSeries(
   datavar: zarr.Array<zarr.DataType, zarr.FetchStore>,
   dimNames: string[],
   region: TRegion,
-  timeAxis: number,
+  varyAxis: number,
   selection: (number | null | zarr.Slice)[],
   isMissing: (v: number) => boolean
 ): Promise<(number | null)[]> {
@@ -402,7 +432,7 @@ async function extractGriddedSeries(
   const latData = latitudes.data as ArrayLike<number | bigint>;
   const lonData = longitudes.data as ArrayLike<number | bigint>;
 
-  const keptAxes = [timeAxis];
+  const keptAxes = [varyAxis];
   if (region.mode === "point") {
     selection[latAxis] = nearestIndex(latData, region.lat);
     selection[lonAxis] = nearestLonIndex(lonData, region.lon);
@@ -422,20 +452,23 @@ async function extractGriddedSeries(
     datavar,
     selection
   );
-  return averageOverSpace(chunk, keptAxes, timeAxis, isMissing);
+  return averageOverSpace(chunk, keptAxes, varyAxis, isMissing);
 }
 
 /**
- * Extracts a per-time-step series for one variable at a point or averaged over
- * a bounding box.
+ * Extracts a series of one variable along the dimension `dimName` (time, depth,
+ * …) at a point or averaged over a bounding box. Every other non-spatial
+ * dimension is fixed to its position in `otherDimSelections`, and only the index
+ * range `[range.start, range.end]` of the varying dimension is fetched.
  */
-export async function fetchTimeSeries(
+export async function fetchSeries(
   datasources: TSources,
   varname: string,
   gridType: T_GRID_TYPES | undefined,
   region: TRegion,
+  dimName: string,
   otherDimSelections: Record<string, number> = {},
-  timeRange?: { start: number; end: number }
+  range?: { start: number; end: number }
 ): Promise<TSeriesResult> {
   const variableSource = ZarrDataManager.getDatasetSource(datasources, varname);
   const datavar = await ZarrDataManager.getVariableInfo(
@@ -449,56 +482,48 @@ export async function fetchTimeSeries(
   const shape = datavar.shape;
   const isMissing = createMissingOrFillPredicate(datavar);
 
-  const timeAxis = findTimeAxis(dimNames);
-  if (timeAxis === -1) {
-    throw new Error(`Variable "${varname}" has no time dimension`);
+  const varyAxis = dimNames.indexOf(dimName);
+  if (varyAxis === -1) {
+    throw new Error(`Variable "${varname}" has no dimension "${dimName}"`);
   }
-  const ntimeFull = shape[timeAxis];
+  const isTime = isTimeName(dimName);
+  const nfull = shape[varyAxis];
 
-  // Clamp the requested time-index range; fetch only that subset.
+  // Clamp the requested index range; fetch only that subset.
   let start = 0;
-  let end = ntimeFull - 1;
-  if (timeRange) {
-    start = Math.max(0, Math.min(ntimeFull - 1, Math.round(timeRange.start)));
-    end = Math.max(start, Math.min(ntimeFull - 1, Math.round(timeRange.end)));
+  let end = nfull - 1;
+  if (range) {
+    start = Math.max(0, Math.min(nfull - 1, Math.round(range.start)));
+    end = Math.max(start, Math.min(nfull - 1, Math.round(range.end)));
   }
-  const ntime = end - start + 1;
+  const nvary = end - start + 1;
 
-  const times = await buildTimeAxis(
+  // Read the coordinate values of the varying dimension over the fetched range.
+  const { values: rawCoords, attrs: coordAttrs } = await readCoordArray(
     datasources,
     variableSource,
-    dimNames[timeAxis],
-    start,
-    end
+    dimName
   );
+  const coords: number[] = [];
+  for (let i = start; i <= Math.min(end, rawCoords.length - 1); i++) {
+    coords.push(coordValue(Number(rawCoords[i]), isTime, coordAttrs));
+  }
 
   const selection: (number | null | zarr.Slice)[] = new Array(
     shape.length
   ).fill(0);
-  selection[timeAxis] = zarr.slice(start, end + 1);
+  selection[varyAxis] = zarr.slice(start, end + 1);
 
   const isHealpix = gridType === GRID_TYPES.HEALPIX;
 
   // Determine spatial axes so the remaining dimensions can be fixed.
-  const spatialAxes = new Set<number>();
-  if (isHealpix) {
-    spatialAxes.add(shape.length - 1);
-  } else {
-    const latAxis = dimNames.findIndex((n) => isLatitudeName(n));
-    const lonAxis = dimNames.findIndex((n) => isLongitudeName(n));
-    if (latAxis !== -1) {
-      spatialAxes.add(latAxis);
-    }
-    if (lonAxis !== -1) {
-      spatialAxes.add(lonAxis);
-    }
-  }
+  const spatialAxes = getSpatialAxes(isHealpix, dimNames, shape.length);
   fixOtherDimensions(
     selection,
     dimNames,
     shape,
     spatialAxes,
-    timeAxis,
+    varyAxis,
     otherDimSelections
   );
 
@@ -509,8 +534,8 @@ export async function fetchTimeSeries(
         varname,
         datavar,
         region,
-        timeAxis,
-        ntime,
+        varyAxis,
+        nvary,
         selection,
         isMissing
       )
@@ -519,16 +544,16 @@ export async function fetchTimeSeries(
         datavar,
         dimNames,
         region,
-        timeAxis,
+        varyAxis,
         selection,
         isMissing
       );
 
-  const cellCount = values.length > 0 ? 1 : 0;
   return {
-    times,
+    coords: coords.slice(0, values.length),
     values,
     units: datavar.attrs.units as string | undefined,
-    cellCount,
+    coordUnits: coordAttrs.units as string | undefined,
+    isTime,
   };
 }
