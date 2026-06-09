@@ -15,13 +15,14 @@ import VariableSelector from "./controls/VariableSelector.vue";
 // Import control components
 import { GRID_TYPES, type T_GRID_TYPES } from "@/lib/data/gridTypeDetector";
 import { clamp, type TProjectionType } from "@/lib/projection/projectionUtils";
-import type { TBounds, TModelInfo } from "@/lib/types/GlobeTypes";
+import type { TBounds, TModelInfo, TSources } from "@/lib/types/GlobeTypes";
 import { useUrlParameterStore } from "@/store/paramStore";
 import { useGlobeControlStore } from "@/store/store";
 import { MOBILE_BREAKPOINT } from "@/ui/common/viewConstants";
 
 const props = defineProps<{
   modelInfo?: TModelInfo;
+  datasources?: TSources;
   currentSource: string;
   gridType?: T_GRID_TYPES;
 }>();
@@ -326,7 +327,12 @@ onMounted(() => {
 
     <Transition name="slide">
       <div v-if="modelInfo && !isHidden" class="controls-scroll full-panel">
-        <VariableSelector v-model="varnameSelector" :model-info="modelInfo" />
+        <VariableSelector
+          v-model="varnameSelector"
+          :model-info="modelInfo"
+          :datasources="datasources"
+          :current-source="currentSource"
+        />
         <DimensionControl />
         <div class="panel-block is-block w-100 colormap-section-header">
           <button

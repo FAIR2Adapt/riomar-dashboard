@@ -792,7 +792,7 @@ onBeforeUnmount(() => {
 
     <div class="ts-header" @click="collapsed = !collapsed">
       <i class="fa-solid fa-chart-line mr-2"></i>
-      <span class="ts-title">Time series</span>
+      <span class="ts-title">Chart</span>
       <i
         class="fa-solid"
         :class="collapsed ? 'fa-angle-up' : 'fa-angle-down'"
@@ -806,7 +806,7 @@ onBeforeUnmount(() => {
   position: fixed;
   bottom: 0;
   left: 0;
-  width: 40rem;
+  width: 30rem;
   max-width: calc(100vw - 1rem);
   max-height: 70vh;
   margin-bottom: 0 !important;

@@ -1,9 +1,15 @@
 import * as zarr from "zarrita";
 
 import { createFetchStore } from "@/lib/data/authStore";
+import {
+  buildSyntheticArray,
+  evaluateDerived,
+  type TSelectionArr,
+} from "@/lib/data/derivedVariables";
 import { lru } from "@/lib/data/lruStore";
 import type {
   TDataSource,
+  TDerivedVariable,
   TSources,
   TZarrV3RootMetadata,
 } from "@/lib/types/GlobeTypes";
@@ -29,6 +35,28 @@ type TDatasetSource = Pick<TDataSource, "dataset" | "store">;
 export class ZarrDataManager {
   private static fetchStore: zarr.Location<zarr.FetchStore> | null = null;
   private static fetchStorePath: string | null = null;
+
+  // Derived (formula) variables, keyed by name, plus the dataset they belong to.
+  private static derived = new Map<string, TDerivedVariable>();
+  private static derivedSources: TSources | null = null;
+
+  /** Registers the derived variables for the current dataset (replaces any prior set). */
+  static setDerivedVariables(defs: TDerivedVariable[], datasources: TSources) {
+    this.derived = new Map(defs.map((d) => [d.name, d]));
+    this.derivedSources = datasources;
+  }
+
+  static isDerived(name: string): boolean {
+    return this.derived.has(name);
+  }
+
+  private static isSyntheticArray(array: unknown): array is { __derived: TDerivedVariable } {
+    return (
+      typeof array === "object" &&
+      array !== null &&
+      "__derived" in (array as Record<string, unknown>)
+    );
+  }
 
   private static normalizeStorePath(store: string) {
     return store.replace(/\/+$/, "");
@@ -95,6 +123,15 @@ export class ZarrDataManager {
     datasource: TDatasetSource,
     variable: string
   ): Promise<zarr.Array<zarr.DataType, zarr.FetchStore>> {
+    if (this.derived.has(variable) && this.derivedSources) {
+      const synthetic = await buildSyntheticArray(
+        this.derived.get(variable)!,
+        this.derivedSources
+      );
+      // The synthetic array exposes the surface consumers read (shape/attrs/dtype)
+      // and is never passed to zarr.get (getVariableDataFromArray routes it).
+      return synthetic as unknown as zarr.Array<zarr.DataType, zarr.FetchStore>;
+    }
     const group = await this.getDataset(datasource);
     const array = await this.getVariable(group, variable);
     return array;
@@ -116,6 +153,13 @@ export class ZarrDataManager {
     variable: string,
     selection?: (number | null | zarr.Slice)[]
   ) {
+    if (this.derived.has(variable) && this.derivedSources) {
+      return (await evaluateDerived(
+        this.derived.get(variable)!,
+        this.derivedSources,
+        (selection ?? []) as TSelectionArr
+      )) as unknown as zarr.Chunk<zarr.DataType>;
+    }
     const array = await this.getVariableInfo(datasource, variable);
     if (selection && selection.length > 0) {
       return await zarr.get(array, selection);
@@ -127,6 +171,13 @@ export class ZarrDataManager {
     array: zarr.Array<zarr.DataType, zarr.FetchStore>,
     selection?: (number | null | zarr.Slice)[]
   ) {
+    if (this.isSyntheticArray(array) && this.derivedSources) {
+      return evaluateDerived(
+        array.__derived,
+        this.derivedSources,
+        (selection ?? []) as TSelectionArr
+      ) as unknown as Promise<zarr.Chunk<zarr.DataType>>;
+    }
     if (selection && selection.length > 0) {
       return zarr.get(array, selection);
     }
@@ -159,6 +210,12 @@ export class ZarrDataManager {
     datasources: TSources,
     varname: string
   ): TDatasetSource {
+    // A derived variable resolves to its reference operand's store/dataset so
+    // CRS, cell and grid-type lookups hit the real backing dataset.
+    const derivedDef = this.derived.get(varname);
+    if (derivedDef) {
+      return datasources.levels[0].datasources[derivedDef.referenceVar];
+    }
     return datasources.levels[0].datasources[varname];
   }
 
@@ -178,5 +235,7 @@ export class ZarrDataManager {
   static invalidateCache() {
     this.fetchStore = null;
     this.fetchStorePath = null;
+    this.derived = new Map();
+    this.derivedSources = null;
   }
 }

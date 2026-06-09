@@ -42,6 +42,29 @@ export type TVarInfo = {
   attrs: zarr.Attributes;
 };
 
+/**
+ * A user-defined variable computed from a JavaScript expression over existing
+ * variables of the same dataset. `referenceVar` and `resultDims` are resolved
+ * once when the formula is created (see {@link computeResultDims}); the result
+ * shares the reference operand's grid, CRS and cell list.
+ */
+export type TDerivedVariable = {
+  /** Unique name of the new variable. */
+  name: string;
+  /** JS expression referencing the `inputs` as bare identifiers. */
+  expression: string;
+  /** Operand variable names, all from the current dataset. */
+  inputs: string[];
+  /** Operand whose dimensions are a superset of the others (drives grid/shape). */
+  referenceVar: string;
+  /** Broadcast dimension-name list; the spatial axis is always last. */
+  resultDims: string[];
+  /** User-supplied units, optional. */
+  units?: string;
+  /** User-supplied long name, optional. */
+  longName?: string;
+};
+
 export type TDataSource = {
   store: string;
   dataset: string;
@@ -52,6 +75,8 @@ export type TDataSource = {
   hidden?: boolean;
   default_range?: TBounds;
   attrs?: zarr.Attributes;
+  /** Present when this entry is a derived (formula) variable. */
+  derived?: TDerivedVariable;
 };
 
 export type TModelInfo = {

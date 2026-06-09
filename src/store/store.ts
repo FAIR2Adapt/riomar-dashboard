@@ -10,7 +10,39 @@ import {
   type TProjectionType,
 } from "@/lib/projection/projectionUtils";
 import type { TColorMap } from "@/lib/shaders/colormapShaders";
-import type { TVarInfo, TBounds } from "@/lib/types/GlobeTypes";
+import type {
+  TVarInfo,
+  TBounds,
+  TDerivedVariable,
+} from "@/lib/types/GlobeTypes";
+
+/** localStorage key holding the formula variables for a given dataset source. */
+function derivedStorageKey(src: string): string {
+  return `riomar:derived:${src}`;
+}
+
+/** Reads the persisted formula variables for a dataset, tolerating bad data. */
+function readDerived(src: string): TDerivedVariable[] {
+  try {
+    const raw = localStorage.getItem(derivedStorageKey(src));
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as TDerivedVariable[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Persists the formula variables for a dataset. */
+function writeDerived(src: string, defs: TDerivedVariable[]): void {
+  try {
+    localStorage.setItem(derivedStorageKey(src), JSON.stringify(defs));
+  } catch {
+    // Ignore quota / availability errors — persistence is best-effort.
+  }
+}
 
 export const UPDATE_MODE = {
   INITIAL_LOAD: "initialLoad",
@@ -69,6 +101,8 @@ export const useGlobeControlStore = defineStore("globeControl", {
       pickMode: PICK_MODE.NONE as TPickMode,
       pickedPoint: null as TPickedPoint | null,
       pickedBbox: null as TPickedBbox | null,
+      // User-defined formula variables for the current dataset.
+      derivedVariables: [] as TDerivedVariable[],
     };
   },
   actions: {
@@ -156,6 +190,24 @@ export const useGlobeControlStore = defineStore("globeControl", {
       this.pickedPoint = null;
       this.pickedBbox = bbox;
       this.pickMode = PICK_MODE.NONE;
+    },
+    /** Loads the formula variables persisted for `src` into the store. */
+    loadDerivedVariables(src: string) {
+      this.derivedVariables = readDerived(src);
+    },
+    /** Adds or replaces a formula variable (by name) and persists it. */
+    addDerivedVariable(src: string, def: TDerivedVariable) {
+      const next = this.derivedVariables.filter((d) => d.name !== def.name);
+      next.push(def);
+      this.derivedVariables = next;
+      writeDerived(src, next);
+    },
+    /** Removes a formula variable by name and persists the change. */
+    removeDerivedVariable(src: string, name: string) {
+      this.derivedVariables = this.derivedVariables.filter(
+        (d) => d.name !== name
+      );
+      writeDerived(src, this.derivedVariables);
     },
   },
 });
