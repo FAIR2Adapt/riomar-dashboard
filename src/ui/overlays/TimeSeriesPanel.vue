@@ -13,7 +13,7 @@ import Annotation from "chartjs-plugin-annotation";
 import dayjs from "dayjs";
 import debounce from "lodash.debounce";
 import { storeToRefs } from "pinia";
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 
 import { GRID_TYPES, type T_GRID_TYPES } from "@/lib/data/gridTypeDetector";
 import {
@@ -73,6 +73,8 @@ const PALETTE = [
 
 const collapsed = ref(false);
 const mode = ref<"point" | "bbox">("point");
+// Swaps the dimension and value axes (dimension on Y, value on X).
+const flipAxes = ref(false);
 
 const loading = ref(false);
 const errorMsg = ref<string | null>(null);
@@ -85,7 +87,8 @@ const cache = ref<Record<string, TSeriesResult>>({});
 // Per-variable error notes from the last plot.
 const varErrors = ref<Record<string, string>>({});
 
-type TPoint = { x: number; y: number | null };
+// Either coordinate may be null: a gap on Y normally, or on X when flipped.
+type TPoint = { x: number | null; y: number | null };
 const canvasRef = ref<HTMLCanvasElement>();
 let chart: Chart<"line", TPoint[]> | undefined;
 
@@ -94,9 +97,19 @@ function isTimeName(name: string): boolean {
   return name.toLowerCase().includes("time");
 }
 
-/** True for a coordinate name that is spatial (lat/lon) or time. */
+/** True for a spatial coordinate name (lat/lon or HEALPix cell index). */
+function isSpatialName(name: string): boolean {
+  return (
+    isLatitudeName(name) ||
+    isLongitudeName(name) ||
+    name === "cell" ||
+    name === "cell_ids"
+  );
+}
+
+/** True for a coordinate name that is spatial (lat/lon/cell) or time. */
 function isSpatialOrTime(name: string): boolean {
-  return isLatitudeName(name) || isLongitudeName(name) || isTimeName(name);
+  return isSpatialName(name) || isTimeName(name);
 }
 
 /** True only on the map view that supports click-picking. */
@@ -114,7 +127,8 @@ const plottableVars = computed(() => {
   });
 });
 
-// Dimension names per variable, used to offer only matching variables.
+// Per-variable dimension names that have a valid range (size > 1). Singleton
+// dimensions are dropped so they're never offered or matched against.
 const varDims = ref<Record<string, string[]>>({});
 watch(
   [() => props.datasources, plottableVars],
@@ -127,7 +141,11 @@ watch(
     await Promise.all(
       (vars as string[]).map(async (name) => {
         try {
-          next[name] = await ZarrDataManager.getDimensionNames(ds, name);
+          const [names, info] = await Promise.all([
+            ZarrDataManager.getDimensionNames(ds, name),
+            ZarrDataManager.getVariableInfoByDatasetSources(ds, name),
+          ]);
+          next[name] = names.filter((_, i) => (info.shape[i] ?? 0) > 1);
         } catch {
           next[name] = [];
         }
@@ -138,21 +156,18 @@ watch(
   { immediate: true }
 );
 
-// Non-spatial dimensions the chart can vary along (time, depth, level, …).
+// Non-spatial dimensions the chart can vary along (time, depth, level, …),
+// unioned across every plottable variable since any of them can be charted.
 const dimOptions = computed(() => {
-  const ranges = varinfo.value?.dimRanges;
-  if (!ranges) {
-    return [] as string[];
+  const names = new Set<string>();
+  for (const dims of Object.values(varDims.value)) {
+    for (const name of dims) {
+      if (!isSpatialName(name)) {
+        names.add(name);
+      }
+    }
   }
-  return ranges
-    .filter(
-      (r): r is NonNullable<typeof r> =>
-        !!r &&
-        r.maxBound > r.minBound &&
-        !isLatitudeName(r.name) &&
-        !isLongitudeName(r.name)
-    )
-    .map((r) => r.name);
+  return [...names];
 });
 
 // The dimension the chart varies along. Defaults to time when available.
@@ -388,19 +403,21 @@ function colorFor(name: string): string {
 // A muted dashed vertical line marking the globally selected coordinate, so the
 // chart shows where the rest of the app is currently positioned on this axis.
 function markerAnnotations(): Record<string, object> {
-  const x = globalDimCoord.value;
-  if (x == null) {
+  const c = globalDimCoord.value;
+  if (c == null) {
     return {};
   }
+  const line = {
+    type: "line",
+    borderColor: "rgba(128, 128, 128, 0.6)",
+    borderWidth: 1,
+    borderDash: [4, 4],
+  };
+  // The marker sits on whichever axis carries the dimension coordinate.
   return {
-    globalPos: {
-      type: "line",
-      xMin: x,
-      xMax: x,
-      borderColor: "rgba(128, 128, 128, 0.6)",
-      borderWidth: 1,
-      borderDash: [4, 4],
-    },
+    globalPos: flipAxes.value
+      ? { ...line, yMin: c, yMax: c }
+      : { ...line, xMin: c, xMax: c },
   };
 }
 
@@ -488,16 +505,35 @@ function renderChart() {
   const cLo = sortedCoords.value[rangeStart.value];
   const cHi = sortedCoords.value[rangeEnd.value];
 
+  const flip = flipAxes.value;
+
+  // Track the dimension-coordinate extent of the shown data, regardless of which
+  // axis it ends up on, so the coordinate scale can be pinned to it.
+  let coordMin: number | undefined;
+  let coordMax: number | undefined;
+
   const datasets = selected.map((name) => {
     const series = cache.value[`${key}::${name}`];
     const color = colorFor(name);
-    const data = series.coords
-      .map((c, i) => ({ x: c, y: series.values[i] }))
+    const points = series.coords
+      .map((c, i) => ({ c, v: series.values[i] }))
       .filter(
         (p) =>
-          (cLo === undefined || p.x >= cLo) && (cHi === undefined || p.x <= cHi)
+          (cLo === undefined || p.c >= cLo) && (cHi === undefined || p.c <= cHi)
       )
-      .sort((a, b) => a.x - b.x);
+      .sort((a, b) => a.c - b.c);
+    for (const p of points) {
+      if (coordMin === undefined || p.c < coordMin) {
+        coordMin = p.c;
+      }
+      if (coordMax === undefined || p.c > coordMax) {
+        coordMax = p.c;
+      }
+    }
+    // When flipped, the dimension coordinate moves to Y and the value to X.
+    const data = points.map((p) =>
+      flip ? { x: p.v, y: p.c } : { x: p.c, y: p.v }
+    );
     return {
       label: series.units ? `${name} (${series.units})` : name,
       data,
@@ -510,46 +546,40 @@ function renderChart() {
     };
   });
 
-  // Pin the x-axis to the min/max of the shown data, with a small 1% gap.
-  let xMin: number | undefined;
-  let xMax: number | undefined;
-  for (const ds of datasets) {
-    for (const p of ds.data) {
-      if (xMin === undefined || p.x < xMin) {
-        xMin = p.x;
-      }
-      if (xMax === undefined || p.x > xMax) {
-        xMax = p.x;
-      }
-    }
-  }
-  if (xMin !== undefined && xMax !== undefined && xMax > xMin) {
-    const pad = (xMax - xMin) * 0.01;
-    xMin -= pad;
-    xMax += pad;
+  // Pin the coordinate axis to the min/max of the shown data, with a 1% gap.
+  if (coordMin !== undefined && coordMax !== undefined && coordMax > coordMin) {
+    const pad = (coordMax - coordMin) * 0.01;
+    coordMin -= pad;
+    coordMax += pad;
   }
 
   const isTime = axisIsTime.value;
   // Depth-like coordinates grow downward, so invert the axis (surface first).
-  const reverseX = !isTime && /depth|deptht|lev/i.test(selectedDim.value);
-  const xTitle = isTime
+  const reverseCoord = !isTime && /depth|deptht|lev/i.test(selectedDim.value);
+  const coordTitle = isTime
     ? undefined
     : axisUnits.value
       ? `${selectedDim.value} (${axisUnits.value})`
       : selectedDim.value;
 
-  const xScale = {
+  // The scale that carries the dimension coordinate (time/depth/level/…).
+  const coordScale = {
     type: "linear" as const,
-    min: xMin,
-    max: xMax,
-    reverse: reverseX,
-    title: { display: !!xTitle, text: xTitle ?? "" },
+    min: coordMin,
+    max: coordMax,
+    reverse: reverseCoord,
+    title: { display: !!coordTitle, text: coordTitle ?? "" },
     ticks: {
       maxTicksLimit: 6,
       callback: (value: string | number) =>
         isTime ? dayjs(Number(value)).format("YYYY-MM-DD") : Number(value),
     },
   };
+  // The scale that carries the variable value.
+  const valueScale = { type: "linear" as const, beginAtZero: false };
+
+  const xScale = flip ? valueScale : coordScale;
+  const yScale = flip ? coordScale : valueScale;
 
   if (!chart) {
     chart = new Chart<"line", TPoint[]>(canvasRef.value, {
@@ -562,7 +592,7 @@ function renderChart() {
         parsing: false,
         scales: {
           x: xScale,
-          y: { beginAtZero: false },
+          y: yScale,
         },
         plugins: {
           annotation: { annotations: markerAnnotations() },
@@ -573,10 +603,12 @@ function renderChart() {
                 if (!items.length) {
                   return "";
                 }
-                const x = Number(items[0].parsed.x);
+                // The dimension coordinate is on whichever axis isn't flipped.
+                const parsed = items[0].parsed;
+                const c = Number(flipAxes.value ? parsed.y : parsed.x);
                 return axisIsTime.value
-                  ? dayjs(x).format("YYYY-MM-DD HH:mm")
-                  : fmtCoord(x);
+                  ? dayjs(c).format("YYYY-MM-DD HH:mm")
+                  : fmtCoord(c);
               },
             },
           },
@@ -587,6 +619,9 @@ function renderChart() {
     chart.options.scales!.x = xScale as unknown as NonNullable<
       typeof chart.options.scales
     >["x"];
+    chart.options.scales!.y = yScale as unknown as NonNullable<
+      typeof chart.options.scales
+    >["y"];
     chart.data.datasets = datasets as unknown as typeof chart.data.datasets;
     annotationOptions().annotations = markerAnnotations();
     chart.update();
@@ -664,6 +699,27 @@ watch([rangeStart, rangeEnd], scheduleReplot);
 // Re-plot when a non-spatial dimension is changed from outside this panel. The
 // cache key encodes the fixed dimensions, so an unaffected chart hits the cache.
 watch(dimSlidersValues, scheduleReplot, { deep: true });
+
+// Collapsing unmounts the canvas (v-if), so the chart must be dropped and
+// rebuilt against the freshly mounted canvas when the card is shown again —
+// otherwise it stays bound to the destroyed element and renders nothing.
+watch(collapsed, (isCollapsed) => {
+  if (isCollapsed) {
+    chart?.destroy();
+    chart = undefined;
+    return;
+  }
+  if (hasPlotted.value) {
+    nextTick(renderChart);
+  }
+});
+
+// Flipping axes only rearranges cached data, so re-render without re-fetching.
+watch(flipAxes, () => {
+  if (hasPlotted.value) {
+    renderChart();
+  }
+});
 
 // Move the global-position marker as it changes, without waiting for a re-fetch.
 watch(globalDimCoord, () => {
@@ -768,14 +824,20 @@ onBeforeUnmount(() => {
 
       <!-- Variable checkboxes -->
       <div class="ts-vars">
-        <label v-for="name in displayVars" :key="name" class="ts-var">
-          <input v-model="checked[name]" type="checkbox" />
-          <span class="ts-var-name" :title="name">{{ name }}</span>
-          <i
-            v-if="varErrors[name]"
-            class="fa-solid fa-triangle-exclamation ts-warn"
-            :title="varErrors[name]"
-          ></i>
+        <div class="ts-var-list">
+          <label v-for="name in displayVars" :key="name" class="ts-var">
+            <input v-model="checked[name]" type="checkbox" />
+            <span class="ts-var-name" :title="name">{{ name }}</span>
+            <i
+              v-if="varErrors[name]"
+              class="fa-solid fa-triangle-exclamation ts-warn"
+              :title="varErrors[name]"
+            ></i>
+          </label>
+        </div>
+        <label class="ts-var ts-flip" title="Swap the X and Y axes">
+          <input v-model="flipAxes" type="checkbox" />
+          <span class="ts-var-name">Flip axes</span>
         </label>
       </div>
 
@@ -895,9 +957,17 @@ onBeforeUnmount(() => {
 
   .ts-vars {
     display: flex;
+    align-items: flex-start;
+    gap: 0.9rem;
+    margin-bottom: 0.6rem;
+  }
+
+  .ts-var-list {
+    flex: 1;
+    min-width: 0;
+    display: flex;
     flex-wrap: wrap;
     gap: 0.4rem 0.9rem;
-    margin-bottom: 0.6rem;
     max-height: 7rem;
     overflow-y: auto;
   }
@@ -915,6 +985,11 @@ onBeforeUnmount(() => {
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 9rem;
+  }
+
+  .ts-flip {
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   .ts-warn {

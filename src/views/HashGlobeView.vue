@@ -20,7 +20,7 @@ import type { TURLParameterValues } from "@/utils/urlParams";
 type TParams = Partial<Record<TURLParameterValues, string>>;
 
 const DEFAULT_DATASET =
-  "https://pangeo-eosc-minioapi.vm.fedcloud.eu/afouilloux-riomar/small_hp_pyramid.zarr";
+  "https://pangeo-eosc-minioapi.vm.fedcloud.eu/afouilloux-riomar/small_test1_hp_fixed.zarr";
 
 const defaultSrc = ref(DEFAULT_DATASET);
 const src = ref("");
