@@ -58,6 +58,7 @@ export const PICK_MODE = {
   NONE: "",
   POINT: "point",
   BBOX: "bbox",
+  POLYGON: "polygon",
 } as const;
 
 export type TPickMode = (typeof PICK_MODE)[keyof typeof PICK_MODE];
@@ -69,6 +70,7 @@ export type TPickedBbox = {
   lonMin: number;
   lonMax: number;
 };
+export type TPickedPolygon = { points: { lat: number; lon: number }[] };
 
 export const useGlobeControlStore = defineStore("globeControl", {
   state: () => {
@@ -101,6 +103,7 @@ export const useGlobeControlStore = defineStore("globeControl", {
       pickMode: PICK_MODE.NONE as TPickMode,
       pickedPoint: null as TPickedPoint | null,
       pickedBbox: null as TPickedBbox | null,
+      pickedPolygon: null as TPickedPolygon | null,
       // User-defined formula variables for the current dataset.
       derivedVariables: [] as TDerivedVariable[],
     };
@@ -180,15 +183,26 @@ export const useGlobeControlStore = defineStore("globeControl", {
     clearPickedBbox() {
       this.pickedBbox = null;
     },
+    clearPickedPolygon() {
+      this.pickedPolygon = null;
+    },
     setPickedPoint(point: TPickedPoint) {
       // Only one selection is active at a time.
       this.pickedBbox = null;
+      this.pickedPolygon = null;
       this.pickedPoint = point;
       this.pickMode = PICK_MODE.NONE;
     },
     setPickedBbox(bbox: TPickedBbox) {
       this.pickedPoint = null;
+      this.pickedPolygon = null;
       this.pickedBbox = bbox;
+      this.pickMode = PICK_MODE.NONE;
+    },
+    setPickedPolygon(polygon: TPickedPolygon) {
+      this.pickedPoint = null;
+      this.pickedBbox = null;
+      this.pickedPolygon = polygon;
       this.pickMode = PICK_MODE.NONE;
     },
     /** Loads the formula variables persisted for `src` into the store. */

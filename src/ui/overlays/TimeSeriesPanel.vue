@@ -56,6 +56,7 @@ const {
   pickMode,
   pickedPoint,
   pickedBbox,
+  pickedPolygon,
 } = storeToRefs(store);
 
 const PALETTE = [
@@ -72,7 +73,7 @@ const PALETTE = [
 ];
 
 const collapsed = ref(false);
-const mode = ref<"point" | "bbox">("point");
+const mode = ref<"point" | "bbox" | "polygon">("point");
 // Swaps the dimension and value axes (dimension on Y, value on X).
 const flipAxes = ref(false);
 
@@ -286,11 +287,17 @@ const rangeEndLabel = computed(() =>
   fmtCoord(sortedCoords.value[rangeEnd.value])
 );
 
-const hasSelection = computed(() =>
-  mode.value === "point" ? !!pickedPoint.value : !!pickedBbox.value
-);
+type TPickKind = "point" | "bbox" | "polygon";
 
-type TPickKind = "point" | "bbox";
+const hasSelection = computed(() => {
+  if (mode.value === "point") {
+    return !!pickedPoint.value;
+  }
+  if (mode.value === "bbox") {
+    return !!pickedBbox.value;
+  }
+  return !!pickedPolygon.value;
+});
 
 /** Whether the given picker is mid-selection on the map right now. */
 function isModePicking(kind: TPickKind): boolean {
@@ -299,7 +306,13 @@ function isModePicking(kind: TPickKind): boolean {
 
 /** Whether the given picker already has a selection. */
 function isModePicked(kind: TPickKind): boolean {
-  return kind === "point" ? !!pickedPoint.value : !!pickedBbox.value;
+  if (kind === "point") {
+    return !!pickedPoint.value;
+  }
+  if (kind === "bbox") {
+    return !!pickedBbox.value;
+  }
+  return !!pickedPolygon.value;
 }
 
 /** Bulma colour class encoding the three button states. */
@@ -313,6 +326,14 @@ function pickBtnClass(kind: TPickKind): string {
   return "is-light";
 }
 
+/** Default icon for each picker. */
+function pickDefaultIcon(kind: TPickKind): string {
+  if (kind === "point") {
+    return "fa-location-dot";
+  }
+  return kind === "bbox" ? "fa-crop-simple" : "fa-draw-polygon";
+}
+
 /** Icon encoding the three button states. */
 function pickBtnIcon(kind: TPickKind): string {
   if (isModePicking(kind)) {
@@ -321,8 +342,16 @@ function pickBtnIcon(kind: TPickKind): string {
   if (isModePicked(kind)) {
     return "fa-check";
   }
-  return kind === "point" ? "fa-location-dot" : "fa-vector-square";
+  return pickDefaultIcon(kind);
 }
+
+/** The store pick mode for each picker kind. */
+const PICK_MODE_FOR: Record<TPickKind, (typeof PICK_MODE)[keyof typeof PICK_MODE]> =
+  {
+    point: PICK_MODE.POINT,
+    bbox: PICK_MODE.BBOX,
+    polygon: PICK_MODE.POLYGON,
+  };
 
 function onPickButton(kind: TPickKind) {
   // Clicking the picker that is currently active cancels it.
@@ -331,23 +360,33 @@ function onPickButton(kind: TPickKind) {
     return;
   }
   mode.value = kind;
-  // Using one picker resets the other selection.
-  if (kind === "point") {
-    store.clearPickedBbox();
-  } else {
+  // Using one picker resets the other selections.
+  if (kind !== "point") {
     store.clearPickedPoint();
   }
-  store.startPick(kind === "point" ? PICK_MODE.POINT : PICK_MODE.BBOX);
+  if (kind !== "bbox") {
+    store.clearPickedBbox();
+  }
+  if (kind !== "polygon") {
+    store.clearPickedPolygon();
+  }
+  store.startPick(PICK_MODE_FOR[kind]);
 }
 
-/** Spatial part of a cache key (point or bbox), or null if nothing is picked. */
+/** Spatial part of a cache key, or null if nothing is picked. */
 function spatialKey(): string | null {
   if (mode.value === "point") {
     const p = pickedPoint.value;
     return p ? `pt:${p.lat},${p.lon}` : null;
   }
-  const b = pickedBbox.value;
-  return b ? `bb:${b.latMin},${b.latMax},${b.lonMin},${b.lonMax}` : null;
+  if (mode.value === "bbox") {
+    const b = pickedBbox.value;
+    return b ? `bb:${b.latMin},${b.latMax},${b.lonMin},${b.lonMax}` : null;
+  }
+  const poly = pickedPolygon.value;
+  return poly
+    ? `pg:${poly.points.map((p) => `${p.lat},${p.lon}`).join(";")}`
+    : null;
 }
 
 /** Current non-spatial dimension positions (e.g. depth), keyed by name. */
@@ -391,8 +430,12 @@ function currentRegion(): TRegion | null {
     const p = pickedPoint.value;
     return p ? { mode: "point", lat: p.lat, lon: p.lon } : null;
   }
-  const b = pickedBbox.value;
-  return b ? { mode: "bbox", ...b } : null;
+  if (mode.value === "bbox") {
+    const b = pickedBbox.value;
+    return b ? { mode: "bbox", ...b } : null;
+  }
+  const poly = pickedPolygon.value;
+  return poly ? { mode: "polygon", points: poly.points } : null;
 }
 
 function colorFor(name: string): string {
@@ -671,8 +714,8 @@ watch(
   { immediate: true }
 );
 
-// Plot automatically once the map reports a picked location / box.
-watch([pickedPoint, pickedBbox], () => {
+// Plot automatically once the map reports a picked location / box / polygon.
+watch([pickedPoint, pickedBbox, pickedPolygon], () => {
   if (hasSelection.value) {
     collapsed.value = false;
     plot();
@@ -785,6 +828,16 @@ onBeforeUnmount(() => {
         >
           <i class="fa-solid mr-2" :class="pickBtnIcon('bbox')"></i>
           Bounding box
+        </button>
+        <button
+          type="button"
+          class="button is-small ts-pick-btn"
+          :class="pickBtnClass('polygon')"
+          :disabled="!canPick"
+          @click="onPickButton('polygon')"
+        >
+          <i class="fa-solid mr-2" :class="pickBtnIcon('polygon')"></i>
+          Polygon
         </button>
       </div>
 

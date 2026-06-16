@@ -14,7 +14,7 @@ import {
 
 import type { TSources } from "@/lib/types/GlobeTypes";
 
-/** A geographic selection: either a single point or a bounding box. */
+/** A geographic selection: a point, a bounding box, or a closed polygon. */
 export type TRegion =
   | { mode: "point"; lat: number; lon: number }
   | {
@@ -23,7 +23,8 @@ export type TRegion =
       latMax: number;
       lonMin: number;
       lonMax: number;
-    };
+    }
+  | { mode: "polygon"; points: { lat: number; lon: number }[] };
 
 /**
  * Result of extracting a series of one variable along a chosen dimension (time,
@@ -72,6 +73,38 @@ function lonInRange(lon: number, lonMin: number, lonMax: number): boolean {
   }
   // Range crosses the antimeridian.
   return l >= lo || l <= hi;
+}
+
+/**
+ * Ray-casting point-in-polygon test on (lon, lat). Longitudes are normalised
+ * relative to the first vertex so a polygon spanning the antimeridian still
+ * tests consistently.
+ */
+function pointInPolygon(
+  lon: number,
+  lat: number,
+  poly: { lat: number; lon: number }[]
+): boolean {
+  if (poly.length < 3) {
+    return false;
+  }
+  const ref = poly[0].lon;
+  const rel = (l: number) => ref + normLon(l - ref);
+  const x = rel(lon);
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = rel(poly[i].lon);
+    const yi = poly[i].lat;
+    const xj = rel(poly[j].lon);
+    const yj = poly[j].lat;
+    const intersect =
+      yi > lat !== yj > lat &&
+      x < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
+    if (intersect) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }
 
 /** A dimension is treated as time if its name contains "time". */
@@ -366,20 +399,24 @@ async function extractHealpixSeries(
     return averageOverSpace(chunk, [varyAxis], varyAxis, isMissing);
   }
 
-  // Bounding box: collect every cell whose centre falls inside it.
+  // Bounding box / polygon: collect every cell whose centre falls inside.
+  const inRegion =
+    region.mode === "bbox"
+      ? (lon: number, lat: number) =>
+          lat >= region.latMin &&
+          lat <= region.latMax &&
+          lonInRange(lon, region.lonMin, region.lonMax)
+      : (lon: number, lat: number) => pointInPolygon(lon, lat, region.points);
+
   const cellIdxs: number[] = [];
   for (let i = 0; i < centres.length; i++) {
     const [lon, lat] = centres[i];
-    if (
-      lat >= region.latMin &&
-      lat <= region.latMax &&
-      lonInRange(lon, region.lonMin, region.lonMax)
-    ) {
+    if (inRegion(lon, lat)) {
       cellIdxs.push(i);
     }
   }
   if (cellIdxs.length === 0) {
-    throw new Error("No HEALPix cells fall within the bounding box");
+    throw new Error("No HEALPix cells fall within the selection");
   }
 
   // Cells aren't contiguous, so fetch the whole cell axis and average the subset.
@@ -433,7 +470,9 @@ async function extractGriddedSeries(
   const lonData = longitudes.data as ArrayLike<number | bigint>;
 
   const keptAxes = [varyAxis];
-  if (region.mode === "point") {
+  if (region.mode === "polygon") {
+    throw new Error("Polygon selection is only supported on HEALPix grids");
+  } else if (region.mode === "point") {
     selection[latAxis] = nearestIndex(latData, region.lat);
     selection[lonAxis] = nearestLonIndex(lonData, region.lon);
   } else {
