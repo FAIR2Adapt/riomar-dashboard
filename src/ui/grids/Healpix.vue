@@ -10,7 +10,11 @@ import { useSharedGridLogic } from "./composables/useSharedGridLogic.ts";
 
 import { buildDimensionRangesAndIndices } from "@/lib/data/dimensionHandling.ts";
 import { ZarrDataManager } from "@/lib/data/ZarrDataManager.ts";
-import { castDataVarToFloat32, getDataBounds } from "@/lib/data/zarrUtils.ts";
+import {
+  castDataVarToFloat32,
+  getDataBounds,
+  HEALPIX_CELL_NAMES,
+} from "@/lib/data/zarrUtils.ts";
 import {
   ProjectionHelper,
   authalicToGeodeticWGS84,
@@ -310,7 +314,7 @@ async function getHealpixCRSInfo() {
         varnameSelector.value
       );
       const coordName = await getCellCoordinateName();
-      for (const name of [coordName, "cell", "cell_ids"]) {
+      for (const name of [...new Set([coordName, ...HEALPIX_CELL_NAMES])]) {
         try {
           const cellInfo = await ZarrDataManager.getVariableInfo(source, name);
           ellipsoid = (cellInfo.attrs["ellipsoid"] as string) || undefined;
@@ -353,11 +357,8 @@ async function getCells() {
     varnameSelector.value
   );
   const coordName = await getCellCoordinateName();
-  // Try the DGGS coordinate name first, then common fallbacks
-  const candidates =
-    coordName === "cell"
-      ? ["cell", "cell_ids"]
-      : [coordName, "cell", "cell_ids"];
+  // Try the DGGS coordinate name first, then common fallbacks (deduped)
+  const candidates = [...new Set([coordName, ...HEALPIX_CELL_NAMES])];
   for (const name of candidates) {
     try {
       let cells = (await ZarrDataManager.getVariableData(source, name)).data as

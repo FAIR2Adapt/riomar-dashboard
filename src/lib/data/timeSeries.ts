@@ -8,6 +8,7 @@ import { ZarrDataManager } from "./ZarrDataManager";
 import {
   createMissingOrFillPredicate,
   getLatLonData,
+  HEALPIX_CELL_NAMES,
   isLatitudeName,
   isLongitudeName,
 } from "./zarrUtils";
@@ -144,7 +145,7 @@ async function getHealpixCells(source: {
   store: string;
   dataset: string;
 }): Promise<number[]> {
-  for (const name of ["cell", "cell_ids"]) {
+  for (const name of HEALPIX_CELL_NAMES) {
     try {
       const raw = (await ZarrDataManager.getVariableData(source, name)).data;
       const ids: number[] = [];

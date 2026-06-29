@@ -7,7 +7,11 @@ import {
   isValidIdentifier,
 } from "@/lib/data/derivedVariables";
 import { ZarrDataManager } from "@/lib/data/ZarrDataManager";
-import { isLatitudeName, isLongitudeName } from "@/lib/data/zarrUtils";
+import {
+  isCellName,
+  isLatitudeName,
+  isLongitudeName,
+} from "@/lib/data/zarrUtils";
 import type {
   TDerivedVariable,
   TModelInfo,
@@ -49,8 +53,7 @@ const candidateVars = computed(() => {
       !v.derived &&
       !v.hidden &&
       varname !== "crs" &&
-      varname !== "cell" &&
-      varname !== "cell_ids" &&
+      !isCellName(varname) &&
       !isLatitudeName(varname) &&
       !isLongitudeName(varname)
     );

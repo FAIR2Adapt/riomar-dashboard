@@ -9,6 +9,7 @@ import ColormapControls from "./controls/ColormapControls.vue";
 import DataInput from "./controls/DataInput.vue";
 import DimensionControl from "./controls/DimensionControl.vue";
 import MaskControls from "./controls/MaskControls.vue";
+import MultiscaleSelector from "./controls/MultiscaleSelector.vue";
 import ProjectionControls from "./controls/ProjectionControls.vue";
 import VariableSelector from "./controls/VariableSelector.vue";
 
@@ -30,6 +31,7 @@ const props = defineProps<{
 defineEmits<{
   onSnapshot: [];
   onRotate: [];
+  switchLevel: [levelIndex: number];
 }>();
 
 // The HEALPix renderer is a 2D MapLibre map, so the 3D-globe-only controls
@@ -327,6 +329,11 @@ onMounted(() => {
 
     <Transition name="slide">
       <div v-if="modelInfo && !isHidden" class="controls-scroll full-panel">
+        <MultiscaleSelector
+          v-if="datasources?.multiscales"
+          :multiscales="datasources.multiscales"
+          @switch-level="$emit('switchLevel', $event)"
+        />
         <VariableSelector
           v-model="varnameSelector"
           :model-info="modelInfo"

@@ -10,8 +10,9 @@ import * as zarr from "zarrita";
 import { useGridDataAccess } from "./composables/useGridDataAccess.ts";
 
 import { buildDimensionRangesAndIndices } from "@/lib/data/dimensionHandling.ts";
+import { resolveHealpixNside } from "@/lib/data/healpixUtils.ts";
 import { ZarrDataManager } from "@/lib/data/ZarrDataManager.ts";
-import { getDataBounds } from "@/lib/data/zarrUtils.ts";
+import { getDataBounds, HEALPIX_CELL_NAMES } from "@/lib/data/zarrUtils.ts";
 import { getColormapLut } from "@/lib/shaders/colormapLut.ts";
 import type { TDimensionRange, TSources } from "@/lib/types/GlobeTypes.ts";
 import { useUrlParameterStore } from "@/store/paramStore.ts";
@@ -539,7 +540,7 @@ async function getCells(): Promise<number[] | undefined> {
     props.datasources!,
     varnameSelector.value
   );
-  for (const name of ["cell", "cell_ids"]) {
+  for (const name of HEALPIX_CELL_NAMES) {
     try {
       const raw = (await ZarrDataManager.getVariableData(source, name)).data;
       const ids: number[] = [];
@@ -555,11 +556,7 @@ async function getCells(): Promise<number[] | undefined> {
 }
 
 async function getHealpixNside(): Promise<number> {
-  const crs = await ZarrDataManager.getCRSInfo(
-    props.datasources!,
-    varnameSelector.value
-  );
-  return crs.attrs["healpix_nside"] as number;
+  return resolveHealpixNside(props.datasources!, varnameSelector.value);
 }
 
 async function datasourceUpdate() {

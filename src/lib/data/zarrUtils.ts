@@ -119,6 +119,18 @@ export function isLatitudeName(name: string) {
   return name === "lat" || name === "latitude" || name === "rlat";
 }
 
+/**
+ * Candidate variable/coordinate names for the HEALPix cell index, in priority
+ * order. The DGGS cell dimension may be named either "cell" or "cells"
+ * depending on the data source, so we accept both (plus the "cell_ids" legacy
+ * name).
+ */
+export const HEALPIX_CELL_NAMES = ["cell", "cells", "cell_ids"];
+
+export function isCellName(name: string) {
+  return HEALPIX_CELL_NAMES.includes(name);
+}
+
 function lonPriority(name: string) {
   if (name === "rlon") {
     return 0;

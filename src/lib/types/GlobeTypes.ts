@@ -94,6 +94,8 @@ export type TMultiscalesLevel = {
 export type TMultiscalesInfo = {
   baseUrl: string;
   layout: TMultiscalesLevel[];
+  /** Index into `layout` of the level currently loaded. */
+  activeLevel?: number;
 };
 
 export type TSources = {

@@ -3,6 +3,7 @@ import * as zarr from "zarrita";
 import {
   ZARR_FORMAT,
   type TDataSource,
+  type TMultiscalesLevel,
   type TSources,
   type TZarrFormat,
   type TZarrV3RootMetadata,
@@ -11,6 +12,7 @@ import {
 import { createFetchStore } from "./authStore";
 import { lru } from "./lruStore";
 import { ZarrDataManager } from "./ZarrDataManager";
+import { isCellName } from "./zarrUtils";
 
 import trim from "@/utils/trim";
 
@@ -40,140 +42,186 @@ function isValidVariable(
   const hasExcludedName = EXCLUDED_VAR_PATTERNS.some((pattern) =>
     varname.includes(pattern)
   );
+  // The HEALPix cell index coordinate may be named "cell" or "cells"
   const isLatLon = varname === "lat" || varname === "lon";
 
-  return shapeValid && !hasExcludedName && !isLatLon;
+  return shapeValid && !hasExcludedName && !isLatLon && !isCellName(varname);
 }
 
-async function collectZarrV2Variables(
+/** A single array found while walking the Zarr group tree. */
+type TArrayEntry = {
+  /** Path relative to the root group, no leading slash (e.g. "sub/temp"). */
+  path: string;
+  shape: number[];
+  dimensionNames?: string[];
+  coordinates?: string;
+  attrs: zarr.Attributes;
+};
+
+/** Parent group path of a node ("" for nodes in the root group). */
+function parentGroupOf(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i === -1 ? "" : path.slice(0, i);
+}
+
+/** Local node name (the last path segment). */
+function localNameOf(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i === -1 ? path : path.slice(i + 1);
+}
+
+/** Depth of a group path, with the root group at depth 0. */
+function groupDepth(group: string): number {
+  return group === "" ? 0 : group.split("/").length;
+}
+
+/** Collect every array in a Zarr V2 consolidated store, with full paths. */
+async function collectZarrV2Entries(
   store: zarr.Listable<zarr.FetchStore>,
-  root: zarr.Group<zarr.FetchStore>,
-  src: string
-): Promise<{
-  candidates: PromiseSettledResult<Record<string, TDataSource>>[];
-  dimensions: Set<string>;
-}> {
-  const dimensions = new Set<string>();
-  const candidates = await Promise.allSettled(
-    store.contents().map(async ({ path, kind }) => {
-      if (kind !== "array") {
-        return {};
-      }
-      const variable = await zarr.open(root.resolve(path), { kind: "array" });
-      const arrayDimensions = variable.attrs?._ARRAY_DIMENSIONS;
-
-      if (Array.isArray(arrayDimensions)) {
-        for (const dim of arrayDimensions) {
-          dimensions.add(dim);
+  root: zarr.Group<zarr.FetchStore>
+): Promise<TArrayEntry[]> {
+  const settled = await Promise.allSettled(
+    store
+      .contents()
+      .map(async ({ path, kind }): Promise<TArrayEntry | null> => {
+        if (kind !== "array") {
+          return null;
         }
-      }
-
-      if (variable.attrs.coordinates) {
-        const coords = variable.attrs.coordinates as string;
-        for (const coord of coords.split(" ")) {
-          dimensions.add(coord);
-        }
-      }
-
-      const varname = path.slice(1);
-      return {
-        [varname]: {
-          store: src,
-          dataset: "",
-          hidden: !isValidVariable(
-            varname,
-            variable.shape,
-            arrayDimensions as string[]
-          ),
-          attrs: { ...variable.attrs, dimensionNames: arrayDimensions },
-        },
-      };
-    })
+        const variable = await zarr.open(root.resolve(path), { kind: "array" });
+        const arrayDimensions = variable.attrs?._ARRAY_DIMENSIONS;
+        return {
+          path: path.replace(/^\//, ""),
+          shape: variable.shape as unknown as number[],
+          dimensionNames: Array.isArray(arrayDimensions)
+            ? (arrayDimensions as string[])
+            : undefined,
+          coordinates: variable.attrs?.coordinates as string | undefined,
+          attrs: variable.attrs,
+        };
+      })
   );
-
-  return { candidates, dimensions };
+  return settled
+    .filter(
+      (r): r is PromiseFulfilledResult<TArrayEntry | null> =>
+        r.status === "fulfilled"
+    )
+    .map((r) => r.value)
+    .filter((e): e is TArrayEntry => e !== null);
 }
 
-async function processZarrV2Variables(
-  store: zarr.Listable<zarr.FetchStore>,
-  root: zarr.Group<zarr.FetchStore>,
-  src: string
-): Promise<Record<string, TDataSource>> {
-  const { candidates, dimensions } = await collectZarrV2Variables(
-    store,
-    root,
-    src
-  );
-
-  // Filter and merge datasources
-  const datasources = candidates
-    .filter((promise) => promise.status === "fulfilled")
-    .map((promise) => promise.value)
-    .filter((obj) => Object.keys(obj).length > 0)
-    .map((obj) => {
-      // Filter out variables that are actually dimensions or coordinates
-      const varname = Object.keys(obj)[0];
-      if (dimensions.has(varname)) {
-        const hiddenObject = { [varname]: { ...obj[varname], hidden: true } };
-        return hiddenObject;
-      }
-      return obj;
-    })
-    .reduce((a, b) => ({ ...a, ...b }), {});
-
-  return datasources;
-}
-
-function processZarrV3Variables(
-  group: zarr.Group<zarr.FetchStore>,
-  src: string
-) {
-  const datasources: Record<
-    string,
-    {
-      store: string;
-      dataset: string;
-      hidden: boolean;
-      attrs: Record<string, unknown>;
-    }
-  > = {};
-  const dimensions = new Set<string>();
+/** Collect every array listed in a Zarr V3 group's consolidated metadata. */
+function collectZarrV3Entries(
+  group: zarr.Group<zarr.FetchStore>
+): TArrayEntry[] {
   const attributes = group.attrs as TZarrV3RootMetadata;
-  const consolidatedMetadata = attributes.consolidated_metadata;
-  const metadata = consolidatedMetadata?.metadata;
-
-  for (const node of Object.values(metadata || {})) {
-    if (node.node_type === "array" && Array.isArray(node.dimension_names)) {
-      for (const dim of node.dimension_names) {
-        dimensions.add(dim);
-      }
-    }
-  }
+  const metadata = attributes.consolidated_metadata?.metadata;
+  const entries: TArrayEntry[] = [];
   for (const [name, node] of Object.entries(metadata || {})) {
     if (node.node_type !== "array") {
       continue;
     }
     const arrayNode = node as zarr.ArrayMetadata;
+    const nodeAttrs = (node.attributes ?? {}) as zarr.Attributes;
+    entries.push({
+      path: name.replace(/^\//, ""),
+      shape: arrayNode.shape as unknown as number[],
+      dimensionNames: arrayNode.dimension_names
+        ? (arrayNode.dimension_names as string[])
+        : undefined,
+      coordinates: nodeAttrs.coordinates as string | undefined,
+      attrs: nodeAttrs,
+    });
+  }
+  return entries;
+}
+
+/** Map each group to the set of dimension/coordinate names used within it. */
+function dimensionsByGroup(entries: TArrayEntry[]): Map<string, Set<string>> {
+  const byGroup = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    const group = parentGroupOf(entry.path);
+    if (!byGroup.has(group)) {
+      byGroup.set(group, new Set());
+    }
+    const dims = byGroup.get(group)!;
+    for (const dim of entry.dimensionNames ?? []) {
+      dims.add(dim);
+    }
+    for (const coord of entry.coordinates?.split(" ") ?? []) {
+      dims.add(coord);
+    }
+  }
+  return byGroup;
+}
+
+/**
+ * Pick the group that holds the data to display. The data may live in the root
+ * group or in a (possibly nested) subgroup, so we walk the tree and select the
+ * shallowest group that contains at least one displayable variable. Coordinate
+ * variables are expected to live alongside the data in the same group. Falls
+ * back to the root group when nothing displayable is found.
+ */
+function pickDataGroup(
+  entries: TArrayEntry[],
+  dimsByGroup: Map<string, Set<string>>
+): string {
+  const groups = [...new Set(entries.map((e) => parentGroupOf(e.path)))];
+  const displayableGroups = groups.filter((group) =>
+    entries.some((entry) => {
+      if (parentGroupOf(entry.path) !== group) {
+        return false;
+      }
+      const name = localNameOf(entry.path);
+      return (
+        !dimsByGroup.get(group)?.has(name) &&
+        isValidVariable(name, entry.shape, entry.dimensionNames)
+      );
+    })
+  );
+  displayableGroups.sort(
+    (a, b) => groupDepth(a) - groupDepth(b) || a.localeCompare(b)
+  );
+  return displayableGroups[0] ?? "";
+}
+
+/**
+ * Build the datasources map from the arrays discovered in the tree, restricted
+ * to the chosen data group. Returns the group path so that the grid/time
+ * sources can be pointed at the same subgroup.
+ */
+function buildDatasources(
+  entries: TArrayEntry[],
+  src: string,
+  forcedDataset?: string
+): { datasources: Record<string, TDataSource>; dataset: string } {
+  const dimsByGroup = dimensionsByGroup(entries);
+  const dataset = forcedDataset ?? pickDataGroup(entries, dimsByGroup);
+  const dims = dimsByGroup.get(dataset) ?? new Set<string>();
+
+  const datasources: Record<string, TDataSource> = {};
+  for (const entry of entries) {
+    if (parentGroupOf(entry.path) !== dataset) {
+      continue;
+    }
+    const name = localNameOf(entry.path);
     datasources[name] = {
       store: src,
-      dataset: "",
+      dataset,
       hidden:
-        !isValidVariable(name, arrayNode.shape, arrayNode.dimension_names) ||
-        dimensions.has(name),
-      attrs: {
-        ...node.attributes,
-        dimensionNames: node.dimension_names,
-      } as Record<string, unknown>,
+        dims.has(name) ||
+        !isValidVariable(name, entry.shape, entry.dimensionNames),
+      attrs: { ...entry.attrs, dimensionNames: entry.dimensionNames },
     };
   }
-  return datasources;
+  return { datasources, dataset };
 }
 
 function createIndex(
   title: string,
   datasources: Record<string, TDataSource>,
   src: string,
-  zarrFormat: TZarrFormat
+  zarrFormat: TZarrFormat,
+  dataset: string
 ): TSources {
   return {
     name: title,
@@ -182,11 +230,11 @@ function createIndex(
       {
         time: {
           store: src,
-          dataset: "",
+          dataset,
         },
         grid: {
           store: src,
-          dataset: "",
+          dataset,
         },
         datasources,
       },
@@ -194,50 +242,124 @@ function createIndex(
   };
 }
 
+/**
+ * Find a multiscales `layout` declared anywhere in a Zarr V3 tree. The
+ * convention places a `multiscales` attribute on a group; it may be the root
+ * group or a (nested) subgroup, e.g. the DGGS pyramid puts it on
+ * `measurements/reflectance`.
+ */
+function findMultiscalesLayout(
+  group: zarr.Group<zarr.FetchStore>
+): TMultiscalesLevel[] | null {
+  const readLayout = (attrs: Record<string, unknown> | undefined) =>
+    (attrs?.multiscales as { layout?: TMultiscalesLevel[] } | undefined)
+      ?.layout;
+
+  // openZarrV3Metadata stores the full zarr.json as group.attrs, so the real
+  // root attributes are nested under group.attrs.attributes.
+  const rootMetadata = group.attrs as TZarrV3RootMetadata;
+  const rootLayout = readLayout(rootMetadata?.attributes);
+  if (rootLayout?.length) {
+    return rootLayout;
+  }
+  const metadata = rootMetadata.consolidated_metadata?.metadata;
+  for (const node of Object.values(metadata || {})) {
+    if (node.node_type === "group") {
+      const layout = readLayout(node.attributes as Record<string, unknown>);
+      if (layout?.length) {
+        return layout;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Index of the coarsest level in a multiscales layout (smallest DGGS
+ * refinement_level). Falls back to the last entry when refinement levels are
+ * not declared. The coarsest level loads fastest, so it is the default.
+ */
+function coarsestLevelIndex(layout: TMultiscalesLevel[]): number {
+  let bestIndex = layout.length - 1;
+  let bestLevel = Infinity;
+  layout.forEach((level, i) => {
+    const dggs = level.dggs as { refinement_level?: number } | undefined;
+    if (typeof dggs?.refinement_level === "number" && dggs.refinement_level < bestLevel) {
+      bestLevel = dggs.refinement_level;
+      bestIndex = i;
+    }
+  });
+  return bestIndex;
+}
+
+/** Index a single Zarr V3 store, honouring a multiscales layout if present. */
+async function indexV3(src: string, levelOverride?: number): Promise<TSources> {
+  const group = await ZarrDataManager.openZarrV3Metadata(createFetchStore(src));
+  const entries = collectZarrV3Entries(group);
+  const layout = findMultiscalesLayout(group);
+
+  if (layout?.length) {
+    const baseUrl = src.replace(/\/$/, "");
+    const levelIndex = levelOverride ?? coarsestLevelIndex(layout);
+    const dataset = layout[levelIndex].asset.replace(/^\/+|\/+$/g, "");
+    // Preferred: the level's arrays are consolidated at the root, so build them
+    // directly with the level subgroup as their `dataset`.
+    const { datasources } = buildDatasources(entries, baseUrl, dataset);
+    const hasVisible = Object.values(datasources).some((d) => !d.hidden);
+    if (hasVisible) {
+      const index = createIndex(
+        group.attrs?.title as string,
+        datasources,
+        baseUrl,
+        ZARR_FORMAT.V3,
+        dataset
+      );
+      index.multiscales = { baseUrl, layout, activeLevel: levelIndex };
+      return index;
+    }
+    // Fallback: the level is its own consolidated store; open it directly.
+    const index = await indexFromZarr(baseUrl + "/" + layout[levelIndex].asset);
+    index.multiscales = { baseUrl, layout, activeLevel: levelIndex };
+    return index;
+  }
+
+  const { datasources, dataset } = buildDatasources(entries, src);
+  return createIndex(
+    group.attrs?.title as string,
+    datasources,
+    src,
+    ZARR_FORMAT.V3,
+    dataset
+  );
+}
+
 export async function indexFromZarr(src: string): Promise<TSources> {
   try {
     const store = await zarr.withConsolidated(lru(createFetchStore(src)));
     const root = await zarr.open(store, { kind: "group" });
-    const datasources = await processZarrV2Variables(store, root, src);
+    const entries = await collectZarrV2Entries(store, root);
+    const { datasources, dataset } = buildDatasources(entries, src);
     return createIndex(
       root.attrs?.title as string,
       datasources,
       src,
-      ZARR_FORMAT.V2
+      ZARR_FORMAT.V2,
+      dataset
     );
   } catch {
-    const group = await ZarrDataManager.openZarrV3Metadata(
-      createFetchStore(src)
-    );
-
-    // Detect multiscales metadata: redirect to the finest level subgroup
-    // Note: openZarrV3Metadata puts the full zarr.json as group.attrs,
-    // so actual group attributes are nested under group.attrs.attributes
-    const rootAttrs = group.attrs as TZarrV3RootMetadata;
-    const groupAttrs = (rootAttrs?.attributes ?? {}) as Record<string, unknown>;
-    if (groupAttrs?.multiscales) {
-      const ms = groupAttrs.multiscales as {
-        layout: Array<{ asset: string; [key: string]: unknown }>;
-      };
-      if (ms.layout?.length > 0) {
-        const baseUrl = src.replace(/\/$/, "");
-        const finestAsset = ms.layout[0].asset;
-        const levelUrl = baseUrl + "/" + finestAsset;
-        // Recursively index the subgroup (it's a regular zarr group)
-        const index = await indexFromZarr(levelUrl);
-        index.multiscales = { baseUrl, layout: ms.layout };
-        return index;
-      }
-    }
-
-    const datasources = processZarrV3Variables(group, src);
-    return createIndex(
-      group.attrs?.title as string,
-      datasources,
-      src,
-      ZARR_FORMAT.V3
-    );
+    return indexV3(src);
   }
+}
+
+/**
+ * Re-index a multiscales dataset at a specific level. Used to switch the
+ * displayed resolution. `baseUrl` is `TMultiscalesInfo.baseUrl`.
+ */
+export async function indexMultiscaleLevel(
+  baseUrl: string,
+  levelIndex: number
+): Promise<TSources> {
+  return indexV3(baseUrl, levelIndex);
 }
 
 /**

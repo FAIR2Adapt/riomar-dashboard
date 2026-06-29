@@ -21,7 +21,7 @@ const props = defineProps<{
 }>();
 
 const store = useGlobeControlStore();
-const { loading, varinfo } = storeToRefs(store);
+const { loading } = storeToRefs(store);
 
 const variableOptions = computed(() => {
   const visibleVars = Object.keys(props.modelInfo.vars).filter((varname) => {
@@ -31,18 +31,22 @@ const variableOptions = computed(() => {
   return visibleVars;
 });
 
-const currentVarUnits = computed(() => {
-  return varinfo.value?.attrs?.units ?? "-";
-});
-
-const hasUnits = computed(() => {
-  const units = varinfo.value?.attrs?.units;
-  return units !== undefined && units !== null && String(units).trim() !== "";
-});
-
-const currentVarLongname = computed(() => {
-  return varinfo.value?.attrs?.long_name ?? "-";
-});
+// Build the dropdown label for a variable, appending its long name and units
+// (when available) so this metadata lives inside the option itself.
+function variableLabel(varname: string): string {
+  const attrs = props.modelInfo.vars[varname]?.attrs;
+  const longName = attrs?.long_name as string | undefined;
+  const units = attrs?.units as string | undefined;
+  const prefix = props.modelInfo.vars[varname]?.derived ? "ƒ " : "";
+  let label = `${prefix}${varname}`;
+  if (longName !== undefined && String(longName).trim() !== "") {
+    label += ` - ${longName}`;
+  }
+  if (units !== undefined && String(units).trim() !== "") {
+    label += ` / ${units}`;
+  }
+  return label;
+}
 
 // Whether the currently selected variable is a formula variable.
 const selectedDerived = computed<TDerivedVariable | null>(() => {
@@ -96,36 +100,27 @@ function onDelete() {
             :key="varname"
             :value="varname"
           >
-            {{ modelInfo.vars[varname]?.derived ? "ƒ " : "" }}{{ varname }}
-            <span v-if="modelInfo.vars[varname]?.attrs?.standard_name">
-              - {{ modelInfo.vars[varname].attrs.standard_name }}
-            </span>
+            {{ variableLabel(varname) }}
           </option>
         </select>
       </div>
-      <div class="var-info-row">
-        <span class="var-info-text">
-          {{ currentVarLongname
-          }}<template v-if="hasUnits"> / {{ currentVarUnits }}</template>
-        </span>
-        <template v-if="selectedDerived">
-          <button
-            type="button"
-            class="button is-small is-light"
-            title="Edit this formula"
-            @click="openEdit"
-          >
-            <i class="fa-solid fa-pen"></i>
-          </button>
-          <button
-            type="button"
-            class="button is-small is-light"
-            title="Delete this formula"
-            @click="onDelete"
-          >
-            <i class="fa-solid fa-trash"></i>
-          </button>
-        </template>
+      <div v-if="selectedDerived" class="var-info-row">
+        <button
+          type="button"
+          class="button is-small is-light"
+          title="Edit this formula"
+          @click="openEdit"
+        >
+          <i class="fa-solid fa-pen"></i>
+        </button>
+        <button
+          type="button"
+          class="button is-small is-light"
+          title="Delete this formula"
+          @click="onDelete"
+        >
+          <i class="fa-solid fa-trash"></i>
+        </button>
       </div>
       <div class="formula-actions">
         <button

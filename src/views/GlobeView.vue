@@ -13,7 +13,11 @@ import {
   GRID_TYPES,
   type T_GRID_TYPES,
 } from "@/lib/data/gridTypeDetector";
-import { indexFromIndex, indexFromZarr } from "@/lib/data/sourceIndexing";
+import {
+  indexFromIndex,
+  indexFromZarr,
+  indexMultiscaleLevel,
+} from "@/lib/data/sourceIndexing";
 import { ZarrDataManager } from "@/lib/data/ZarrDataManager";
 import {
   availableColormaps,
@@ -250,6 +254,34 @@ const updateSrc = async () => {
   }
 };
 
+// Switch the displayed resolution of a multiscale dataset. Re-indexes the
+// chosen level (same store, different subgroup), keeps the current variable
+// when possible, and remounts the renderer to reload the data.
+const switchMultiscaleLevel = async (levelIndex: number) => {
+  const ms = datasources.value?.multiscales;
+  if (!ms || levelIndex === ms.activeLevel) {
+    return;
+  }
+  store.startLoading();
+  try {
+    const prevVar = varnameSelector.value;
+    const index = await indexMultiscaleLevel(ms.baseUrl, levelIndex);
+    datasources.value = index;
+    const vars = index.levels[0].datasources;
+    if (!prevVar || !(prevVar in vars) || vars[prevVar].hidden) {
+      const validVars = Object.keys(vars).filter((name) => !vars[name].hidden);
+      varnameSelector.value = index.default_var ?? validVars[0];
+    }
+    // Remount the renderer so it reloads data for the new level.
+    globeKey.value += 1;
+    await setGridType();
+  } catch (e) {
+    logError(e, "Failed to switch resolution level");
+  } finally {
+    store.stopLoading();
+  }
+};
+
 const makeSnapshot = () => {
   if (globe.value) {
     globe.value.makeSnapshot();
@@ -295,6 +327,7 @@ onMounted(async () => {
       :grid-type="detectedGridType"
       @on-snapshot="makeSnapshot"
       @on-rotate="toggleRotate"
+      @switch-level="switchMultiscaleLevel"
     />
 
     <div v-if="loading" class="top-right-loader loader" />

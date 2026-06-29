@@ -23,7 +23,11 @@ import {
   type TSeriesResult,
 } from "@/lib/data/timeSeries";
 import { ZarrDataManager } from "@/lib/data/ZarrDataManager";
-import { isLatitudeName, isLongitudeName } from "@/lib/data/zarrUtils";
+import {
+  isCellName,
+  isLatitudeName,
+  isLongitudeName,
+} from "@/lib/data/zarrUtils";
 import type { TModelInfo, TSources } from "@/lib/types/GlobeTypes";
 import RangeSlider from "@/ui/common/RangeSlider.vue";
 import { PICK_MODE, useGlobeControlStore } from "@/store/store";
@@ -100,12 +104,7 @@ function isTimeName(name: string): boolean {
 
 /** True for a spatial coordinate name (lat/lon or HEALPix cell index). */
 function isSpatialName(name: string): boolean {
-  return (
-    isLatitudeName(name) ||
-    isLongitudeName(name) ||
-    name === "cell" ||
-    name === "cell_ids"
-  );
+  return isLatitudeName(name) || isLongitudeName(name) || isCellName(name);
 }
 
 /** True for a coordinate name that is spatial (lat/lon/cell) or time. */
