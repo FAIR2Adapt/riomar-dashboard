@@ -2,14 +2,22 @@
 import { storeToRefs } from "pinia";
 import { computed, onMounted, ref, watch, type Ref } from "vue";
 
-import type { TModelInfo, TSources } from "../lib/types/GlobeTypes";
+import type {
+  TDataSource,
+  TModelInfo,
+  TSources,
+} from "../lib/types/GlobeTypes";
 
 import {
   getGridType,
   GRID_TYPES,
   type T_GRID_TYPES,
 } from "@/lib/data/gridTypeDetector";
-import { indexFromIndex, indexFromZarr } from "@/lib/data/sourceIndexing";
+import {
+  indexFromIndex,
+  indexFromZarr,
+  indexMultiscaleLevel,
+} from "@/lib/data/sourceIndexing";
 import { ZarrDataManager } from "@/lib/data/ZarrDataManager";
 import {
   availableColormaps,
@@ -29,6 +37,7 @@ import GridTriangular from "@/ui/grids/Triangular.vue";
 import AboutView from "@/ui/overlays/AboutModal.vue";
 import GlobeControls from "@/ui/overlays/Controls.vue";
 import InfoPanel from "@/ui/overlays/InfoPanel.vue";
+import TimeSeriesPanel from "@/ui/overlays/TimeSeriesPanel.vue";
 import { useLog } from "@/utils/logging";
 
 const props = defineProps<{ src: string }>();
@@ -64,18 +73,69 @@ const activeGridType = computed(() => {
   }
 });
 
+// Formula variables turned into TDataSource entries. Each points at its
+// reference operand's store/dataset so grid/CRS/cell lookups resolve, and is
+// tagged with `derived` so ZarrDataManager routes it to the evaluator. Defs
+// referencing missing variables (e.g. from another dataset) are skipped.
+const derivedEntries = computed<Record<string, TDataSource>>(() => {
+  const ds = datasources.value;
+  if (!ds) {
+    return {};
+  }
+  const realVars = ds.levels[0].datasources;
+  const entries: Record<string, TDataSource> = {};
+  for (const def of store.derivedVariables) {
+    const ref = realVars[def.referenceVar];
+    const allExist = ref && def.inputs.every((name) => realVars[name]);
+    if (!allExist) {
+      continue;
+    }
+    entries[def.name] = {
+      store: ref.store,
+      dataset: ref.dataset,
+      attrs: {
+        units: def.units ?? "",
+        long_name: def.longName ?? def.name,
+        standard_name: def.longName ?? def.name,
+        dimensionNames: def.resultDims,
+        _ARRAY_DIMENSIONS: def.resultDims,
+      },
+      derived: def,
+    };
+  }
+  return entries;
+});
+
 const modelInfo = computed(() => {
   if (datasources.value === undefined) {
     return undefined;
   } else {
     return {
       title: datasources.value.name,
-      vars: datasources.value.levels[0].datasources,
+      vars: {
+        ...datasources.value.levels[0].datasources,
+        ...derivedEntries.value,
+      },
       defaultVar: datasources.value.default_var,
       colormaps: Object.keys(availableColormaps) as TColorMap[],
     } as TModelInfo;
   }
 });
+
+// Keep ZarrDataManager's derived-variable registry in sync with the store and
+// the current dataset so the evaluator can resolve operands.
+watch(
+  [() => store.derivedVariables, () => datasources.value],
+  () => {
+    if (datasources.value) {
+      ZarrDataManager.setDerivedVariables(
+        store.derivedVariables,
+        datasources.value
+      );
+    }
+  },
+  { deep: true }
+);
 
 const currentGlobeComponent = computed(() => {
   const gridMapping = {
@@ -165,6 +225,8 @@ function prepareDefaults(src: string, index: TSources) {
 const updateSrc = async () => {
   const src = props.src;
   ZarrDataManager.invalidateCache();
+  // Restore this dataset's formula variables (cleared by $reset / invalidateCache).
+  store.loadDerivedVariables(src);
   // FIXME: Trying zarr and json-index in parallel and picking the first that
   // works. If both fail, we log the last error which is from the json-index.
   // This leads to confusing error messages if the zarr source is supposed to
@@ -189,6 +251,34 @@ const updateSrc = async () => {
     store.stopLoading();
     logError(lastError, "Failed to fetch data");
     setGridType();
+  }
+};
+
+// Switch the displayed resolution of a multiscale dataset. Re-indexes the
+// chosen level (same store, different subgroup), keeps the current variable
+// when possible, and remounts the renderer to reload the data.
+const switchMultiscaleLevel = async (levelIndex: number) => {
+  const ms = datasources.value?.multiscales;
+  if (!ms || levelIndex === ms.activeLevel) {
+    return;
+  }
+  store.startLoading();
+  try {
+    const prevVar = varnameSelector.value;
+    const index = await indexMultiscaleLevel(ms.baseUrl, levelIndex);
+    datasources.value = index;
+    const vars = index.levels[0].datasources;
+    if (!prevVar || !(prevVar in vars) || vars[prevVar].hidden) {
+      const validVars = Object.keys(vars).filter((name) => !vars[name].hidden);
+      varnameSelector.value = index.default_var ?? validVars[0];
+    }
+    // Remount the renderer so it reloads data for the new level.
+    globeKey.value += 1;
+    await setGridType();
+  } catch (e) {
+    logError(e, "Failed to switch resolution level");
+  } finally {
+    store.stopLoading();
   }
 };
 
@@ -232,10 +322,12 @@ onMounted(async () => {
     <GlobeControls
       :key="globeControlKey"
       :model-info="modelInfo"
+      :datasources="datasources"
       :current-source="props.src"
       :grid-type="detectedGridType"
       @on-snapshot="makeSnapshot"
       @on-rotate="toggleRotate"
+      @switch-level="switchMultiscaleLevel"
     />
 
     <div v-if="loading" class="top-right-loader loader" />
@@ -260,6 +352,12 @@ onMounted(async () => {
       :key="globeKey"
       :datasources="datasources"
       :is-rotated="detectedGridType === GRID_TYPES.REGULAR_ROTATED"
+    />
+    <TimeSeriesPanel
+      v-if="detectedGridType !== undefined && detectedGridType !== GRID_TYPES.ERROR"
+      :datasources="datasources"
+      :model-info="modelInfo"
+      :grid-type="detectedGridType"
     />
     <div class="buttons about-corner-link">
       <InfoPanel

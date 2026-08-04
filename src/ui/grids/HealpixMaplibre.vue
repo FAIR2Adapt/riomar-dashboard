@@ -10,12 +10,14 @@ import * as zarr from "zarrita";
 import { useGridDataAccess } from "./composables/useGridDataAccess.ts";
 
 import { buildDimensionRangesAndIndices } from "@/lib/data/dimensionHandling.ts";
+import { resolveHealpixNside } from "@/lib/data/healpixUtils.ts";
 import { ZarrDataManager } from "@/lib/data/ZarrDataManager.ts";
-import { getDataBounds } from "@/lib/data/zarrUtils.ts";
+import { getDataBounds, HEALPIX_CELL_NAMES } from "@/lib/data/zarrUtils.ts";
 import { getColormapLut } from "@/lib/shaders/colormapLut.ts";
 import type { TDimensionRange, TSources } from "@/lib/types/GlobeTypes.ts";
 import { useUrlParameterStore } from "@/store/paramStore.ts";
 import {
+  PICK_MODE,
   UPDATE_MODE,
   useGlobeControlStore,
   type TUpdateMode,
@@ -45,6 +47,7 @@ const {
   invertColormap,
   posterizeLevels,
   selection,
+  pickMode,
 } = storeToRefs(store);
 
 const urlParameterStore = useUrlParameterStore();
@@ -58,6 +61,381 @@ const mapContainer = ref<HTMLDivElement>();
 let map: maplibregl.Map | undefined;
 let cellIds: number[] = [];
 let nside = 0;
+
+// --- Map-pick state (location / box / polygon selection for the time series) ---
+let pickMarker: maplibregl.Marker | undefined;
+// Corner where a bounding-box drag started, and whether a drag is in progress.
+let bboxDragStart: { lng: number; lat: number } | null = null;
+let bboxDragging = false;
+// Vertices committed for the in-progress polygon, plus the live cursor position.
+type TLngLat = { lng: number; lat: number };
+let polygonPoints: TLngLat[] = [];
+let polygonMouse: TLngLat | null = null;
+
+// Pixel radius within which a click on the first vertex closes the polygon.
+const POLYGON_CLOSE_PX = 12;
+const PICK_COLOR = "#e8743b";
+
+function setSourceData(id: string, features: GeoJSON.Feature[]) {
+  const src = map?.getSource(id) as maplibregl.GeoJSONSource | undefined;
+  src?.setData({ type: "FeatureCollection", features });
+}
+
+function clearPickOverlays() {
+  pickMarker?.remove();
+  pickMarker = undefined;
+  bboxDragStart = null;
+  bboxDragging = false;
+  polygonPoints = [];
+  polygonMouse = null;
+  setSourceData("pick-bbox", []);
+  setSourceData("pick-polygon", []);
+  setSourceData("pick-polygon-pts", []);
+}
+
+/** Shoelace area (deg²) of a polygon ring; orientation-independent. */
+function polygonArea(pts: TLngLat[]): number {
+  let a = 0;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    a += (pts[j].lng + pts[i].lng) * (pts[j].lat - pts[i].lat);
+  }
+  return Math.abs(a / 2);
+}
+
+/** Whether segments p1-p2 and p3-p4 properly cross. */
+function segmentsCross(
+  p1: TLngLat,
+  p2: TLngLat,
+  p3: TLngLat,
+  p4: TLngLat
+): boolean {
+  const ccw = (a: TLngLat, b: TLngLat, c: TLngLat) =>
+    (c.lat - a.lat) * (b.lng - a.lng) > (b.lat - a.lat) * (c.lng - a.lng);
+  return (
+    ccw(p1, p3, p4) !== ccw(p2, p3, p4) && ccw(p1, p2, p3) !== ccw(p1, p2, p4)
+  );
+}
+
+/** A polygon is simple if no two non-adjacent edges cross. */
+function isSimplePolygon(pts: TLngLat[]): boolean {
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const a1 = pts[i];
+    const a2 = pts[(i + 1) % n];
+    for (let j = i + 1; j < n; j++) {
+      // Skip edges that share a vertex (adjacent edges, incl. the closing wrap).
+      if (j === i + 1 || (i === 0 && j === n - 1)) {
+        continue;
+      }
+      if (segmentsCross(a1, a2, pts[j], pts[(j + 1) % n])) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/** A polygon is valid (chartable) if it is a simple ring with a real area. */
+function isValidPolygon(pts: TLngLat[]): boolean {
+  return pts.length >= 3 && polygonArea(pts) > 1e-9 && isSimplePolygon(pts);
+}
+
+/**
+ * Whether extending the open path with `next` keeps it simple: the new edge
+ * (last vertex → next) must not cross any earlier edge. Adjacent edges that
+ * share the last vertex are skipped.
+ */
+function edgeKeepsPathSimple(pts: TLngLat[], next: TLngLat): boolean {
+  const n = pts.length;
+  const a1 = pts[n - 1];
+  for (let i = 0; i < n - 2; i++) {
+    if (segmentsCross(a1, next, pts[i], pts[i + 1])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Redraws the in-progress polygon: a faint fill, an outline (with a rubber-band
+ * segment to the cursor unless `closed`), and highlighted vertices. The colour
+ * turns red while the ring would be an invalid polygon.
+ */
+function drawPolygonPreview(closed = false) {
+  const pts = polygonPoints;
+  const color = PICK_COLOR;
+
+  const features: GeoJSON.Feature[] = [];
+
+  // Show the area fill only once the ring is a valid, closeable polygon.
+  if (isValidPolygon(pts)) {
+    const ring = [...pts.map((p) => [p.lng, p.lat]), [pts[0].lng, pts[0].lat]];
+    features.push({
+      type: "Feature",
+      properties: { color },
+      geometry: { type: "Polygon", coordinates: [ring] },
+    });
+  }
+
+  const line = pts.map((p) => [p.lng, p.lat]);
+  if (closed && pts.length >= 2) {
+    line.push([pts[0].lng, pts[0].lat]);
+  } else if (polygonMouse) {
+    line.push([polygonMouse.lng, polygonMouse.lat]);
+  }
+  if (line.length >= 2) {
+    features.push({
+      type: "Feature",
+      properties: { color },
+      geometry: { type: "LineString", coordinates: line },
+    });
+  }
+  setSourceData("pick-polygon", features);
+
+  // Highlight the first vertex (the close target) and the last one distinctly.
+  const vertices: GeoJSON.Feature[] = pts.map((p, i) => ({
+    type: "Feature",
+    properties: {
+      role: i === 0 ? "first" : i === pts.length - 1 ? "last" : "mid",
+    },
+    geometry: { type: "Point", coordinates: [p.lng, p.lat] },
+  }));
+  setSourceData("pick-polygon-pts", vertices);
+}
+
+function drawPickBbox(
+  lonMin: number,
+  latMin: number,
+  lonMax: number,
+  latMax: number
+): void {
+  setSourceData("pick-bbox", [
+    {
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [lonMin, latMin],
+            [lonMax, latMin],
+            [lonMax, latMax],
+            [lonMin, latMax],
+            [lonMin, latMin],
+          ],
+        ],
+      },
+    },
+  ]);
+}
+
+function onMapClick(e: maplibregl.MapMouseEvent) {
+  if (!map) {
+    return;
+  }
+  if (pickMode.value === PICK_MODE.POINT) {
+    const { lng, lat } = e.lngLat;
+    clearPickOverlays();
+    pickMarker = new maplibregl.Marker({ color: "#4a90d9" })
+      .setLngLat([lng, lat])
+      .addTo(map);
+    store.setPickedPoint({ lat, lon: lng });
+    return;
+  }
+  if (pickMode.value === PICK_MODE.POLYGON) {
+    onPolygonClick(e);
+  }
+}
+
+// Polygon mode: each click adds a vertex; clicking the first vertex again
+// closes and completes the polygon. A click that would make the path cross
+// itself is rejected, so the in-progress shape can never become invalid.
+function onPolygonClick(e: maplibregl.MapMouseEvent) {
+  if (!map) {
+    return;
+  }
+  const { lng, lat } = e.lngLat;
+  const next = { lng, lat };
+
+  if (polygonPoints.length >= 3) {
+    const first = map.project([polygonPoints[0].lng, polygonPoints[0].lat]);
+    const here = map.project([lng, lat]);
+    const closing = Math.hypot(first.x - here.x, first.y - here.y) <=
+      POLYGON_CLOSE_PX;
+    if (closing) {
+      // Finish only if the closed ring is a valid polygon (simple + real area).
+      if (isValidPolygon(polygonPoints)) {
+        polygonMouse = null;
+        drawPolygonPreview(true);
+        store.setPickedPolygon({
+          points: polygonPoints.map((p) => ({ lat: p.lat, lon: p.lng })),
+        });
+      }
+      return;
+    }
+  }
+
+  // Reject a vertex whose new edge would cross the existing path.
+  if (!edgeKeepsPathSimple(polygonPoints, next)) {
+    return;
+  }
+  polygonPoints.push(next);
+  drawPolygonPreview();
+}
+
+function onPolygonMouseMove(e: maplibregl.MapMouseEvent) {
+  if (
+    !map ||
+    pickMode.value !== PICK_MODE.POLYGON ||
+    polygonPoints.length === 0
+  ) {
+    return;
+  }
+  polygonMouse = { lng: e.lngLat.lng, lat: e.lngLat.lat };
+  drawPolygonPreview();
+}
+
+// Bounding-box mode: press to set one corner, drag for a live preview, release
+// to complete. Panning is disabled while picking (see the pickMode watch).
+function onBboxMouseDown(e: maplibregl.MapMouseEvent) {
+  if (!map || pickMode.value !== PICK_MODE.BBOX) {
+    return;
+  }
+  e.preventDefault();
+  clearPickOverlays();
+  bboxDragStart = { lng: e.lngLat.lng, lat: e.lngLat.lat };
+  bboxDragging = true;
+}
+
+function onBboxMouseMove(e: maplibregl.MapMouseEvent) {
+  if (!map || !bboxDragging || !bboxDragStart) {
+    return;
+  }
+  const { lng, lat } = e.lngLat;
+  drawPickBbox(
+    Math.min(bboxDragStart.lng, lng),
+    Math.min(bboxDragStart.lat, lat),
+    Math.max(bboxDragStart.lng, lng),
+    Math.max(bboxDragStart.lat, lat)
+  );
+}
+
+function onBboxMouseUp(e: maplibregl.MapMouseEvent) {
+  if (!map || !bboxDragging || !bboxDragStart) {
+    return;
+  }
+  const { lng, lat } = e.lngLat;
+  const start = bboxDragStart;
+  bboxDragging = false;
+  bboxDragStart = null;
+
+  // Ignore a click with no real drag: keep picking so the user can try again.
+  if (lng === start.lng && lat === start.lat) {
+    clearPickOverlays();
+    return;
+  }
+
+  const latMin = Math.min(start.lat, lat);
+  const latMax = Math.max(start.lat, lat);
+  const lonMin = Math.min(start.lng, lng);
+  const lonMax = Math.max(start.lng, lng);
+  drawPickBbox(lonMin, latMin, lonMax, latMax);
+  store.setPickedBbox({ latMin, latMax, lonMin, lonMax });
+}
+
+function addPickLayers() {
+  if (!map || map.getSource("pick-bbox")) {
+    return;
+  }
+  map.addSource("pick-bbox", {
+    type: "geojson",
+    data: { type: "FeatureCollection", features: [] },
+  });
+  map.addLayer({
+    id: "pick-bbox-fill",
+    type: "fill",
+    source: "pick-bbox",
+    paint: { "fill-color": "#e8743b", "fill-opacity": 0.12 },
+  });
+  map.addLayer({
+    id: "pick-bbox-line",
+    type: "line",
+    source: "pick-bbox",
+    paint: { "line-color": "#e8743b", "line-width": 2 },
+  });
+
+  // Polygon: fill + outline (colour is data-driven so it can turn red when the
+  // ring is invalid), plus a vertex layer that highlights the first/last point.
+  map.addSource("pick-polygon", {
+    type: "geojson",
+    data: { type: "FeatureCollection", features: [] },
+  });
+  map.addLayer({
+    id: "pick-polygon-fill",
+    type: "fill",
+    source: "pick-polygon",
+    filter: ["==", ["geometry-type"], "Polygon"],
+    paint: { "fill-color": ["get", "color"], "fill-opacity": 0.12 },
+  });
+  map.addLayer({
+    id: "pick-polygon-line",
+    type: "line",
+    source: "pick-polygon",
+    filter: ["==", ["geometry-type"], "LineString"],
+    paint: { "line-color": ["get", "color"], "line-width": 2 },
+  });
+  map.addSource("pick-polygon-pts", {
+    type: "geojson",
+    data: { type: "FeatureCollection", features: [] },
+  });
+  map.addLayer({
+    id: "pick-polygon-pts",
+    type: "circle",
+    source: "pick-polygon-pts",
+    paint: {
+      "circle-radius": ["match", ["get", "role"], "first", 7, "last", 6, 4],
+      "circle-color": [
+        "match",
+        ["get", "role"],
+        "first",
+        "#19a979",
+        "last",
+        "#945ecf",
+        "#ffffff",
+      ],
+      "circle-stroke-color": "#e8743b",
+      "circle-stroke-width": 2,
+    },
+  });
+}
+
+// Update the cursor and reset any in-progress selection when picking starts.
+watch(
+  () => pickMode.value,
+  (mode) => {
+    if (!map) {
+      return;
+    }
+    if (mode === PICK_MODE.NONE) {
+      map.getCanvas().style.cursor = "";
+      map.dragPan.enable();
+      bboxDragStart = null;
+      bboxDragging = false;
+      // Drop the in-progress polygon vertices but keep any completed overlay.
+      polygonPoints = [];
+      polygonMouse = null;
+      return;
+    }
+    clearPickOverlays();
+    map.getCanvas().style.cursor = "crosshair";
+    // Disable panning during a box drag so the drag draws the box instead.
+    if (mode === PICK_MODE.BBOX) {
+      map.dragPan.disable();
+    } else {
+      map.dragPan.enable();
+    }
+  }
+);
 
 // Cache of the last fetched slice so colormap/bounds changes can re-color the
 // existing GeoJSON without refetching from the store.
@@ -162,7 +540,7 @@ async function getCells(): Promise<number[] | undefined> {
     props.datasources!,
     varnameSelector.value
   );
-  for (const name of ["cell", "cell_ids"]) {
+  for (const name of HEALPIX_CELL_NAMES) {
     try {
       const raw = (await ZarrDataManager.getVariableData(source, name)).data;
       const ids: number[] = [];
@@ -178,11 +556,7 @@ async function getCells(): Promise<number[] | undefined> {
 }
 
 async function getHealpixNside(): Promise<number> {
-  const crs = await ZarrDataManager.getCRSInfo(
-    props.datasources!,
-    varnameSelector.value
-  );
-  return crs.attrs["healpix_nside"] as number;
+  return resolveHealpixNside(props.datasources!, varnameSelector.value);
 }
 
 async function datasourceUpdate() {
@@ -516,6 +890,7 @@ function switchBasemap(name: string) {
       source: "healpix",
       paint: { "fill-color": ["get", "color"], "fill-opacity": 0.9 },
     });
+    addPickLayers();
     // Re-render current data
     getData();
   });
@@ -545,14 +920,23 @@ onMounted(() => {
       },
     });
 
+    addPickLayers();
+
     // Load data after map is ready
     if (props.datasources) {
       datasourceUpdate();
     }
   });
+
+  map.on("click", onMapClick);
+  map.on("mousedown", onBboxMouseDown);
+  map.on("mousemove", onBboxMouseMove);
+  map.on("mousemove", onPolygonMouseMove);
+  map.on("mouseup", onBboxMouseUp);
 });
 
 onBeforeUnmount(() => {
+  clearPickOverlays();
   map?.remove();
   map = undefined;
 });

@@ -117,6 +117,30 @@ async function determineGridTypeFromCRS(
   return null;
 }
 
+// Attempt to determine grid type from the DGGS group attribute. Some HEALPix
+// datasets (e.g. the zarr-conventions DGGS layout) carry no CRS variable and
+// instead describe the grid via a "dggs" attribute on the data group.
+async function determineGridTypeFromDGGS(
+  datasources: TSources,
+  varnameSelector: string
+): Promise<T_GRID_TYPES | null> {
+  try {
+    const source = ZarrDataManager.getDatasetSource(
+      datasources,
+      varnameSelector
+    );
+    const group = await ZarrDataManager.getDatasetGroup(source);
+    const dggs = group.attrs?.dggs as { name?: string } | undefined;
+    if (dggs?.name === "healpix") {
+      return GRID_TYPES.HEALPIX;
+    }
+  } catch {
+    // DGGS check failed, return null to continue with other checks
+  }
+
+  return null;
+}
+
 // Determine grid type from lat/lon data analysis
 async function determineGridTypeFromData(
   datavar: zarr.Array<zarr.DataType, zarr.FetchStore>,
@@ -169,6 +193,15 @@ export async function getGridType(
     );
     if (crsGridType) {
       return crsGridType;
+    }
+
+    // Check the DGGS group attribute (HEALPix datasets without a CRS variable)
+    const dggsGridType = await determineGridTypeFromDGGS(
+      datasources!,
+      varnameSelector
+    );
+    if (dggsGridType) {
+      return dggsGridType;
     }
 
     const dimensions = await ZarrDataManager.getDimensionNames(

@@ -9,19 +9,21 @@ import ColormapControls from "./controls/ColormapControls.vue";
 import DataInput from "./controls/DataInput.vue";
 import DimensionControl from "./controls/DimensionControl.vue";
 import MaskControls from "./controls/MaskControls.vue";
+import MultiscaleSelector from "./controls/MultiscaleSelector.vue";
 import ProjectionControls from "./controls/ProjectionControls.vue";
 import VariableSelector from "./controls/VariableSelector.vue";
 
 // Import control components
 import { GRID_TYPES, type T_GRID_TYPES } from "@/lib/data/gridTypeDetector";
 import { clamp, type TProjectionType } from "@/lib/projection/projectionUtils";
-import type { TBounds, TModelInfo } from "@/lib/types/GlobeTypes";
+import type { TBounds, TModelInfo, TSources } from "@/lib/types/GlobeTypes";
 import { useUrlParameterStore } from "@/store/paramStore";
 import { useGlobeControlStore } from "@/store/store";
 import { MOBILE_BREAKPOINT } from "@/ui/common/viewConstants";
 
 const props = defineProps<{
   modelInfo?: TModelInfo;
+  datasources?: TSources;
   currentSource: string;
   gridType?: T_GRID_TYPES;
 }>();
@@ -29,6 +31,7 @@ const props = defineProps<{
 defineEmits<{
   onSnapshot: [];
   onRotate: [];
+  switchLevel: [levelIndex: number];
 }>();
 
 // The HEALPix renderer is a 2D MapLibre map, so the 3D-globe-only controls
@@ -84,6 +87,9 @@ const {
 const menuCollapsed: Ref<boolean> = ref(false);
 const mobileMenuCollapsed: Ref<boolean> = ref(true);
 const isMobileView: Ref<boolean> = ref(false);
+
+// Colormap section (range + colormap controls) is collapsed by default.
+const colormapCollapsed: Ref<boolean> = ref(true);
 
 const dataBounds = computed(() => {
   return varinfo.value?.bounds ?? {};
@@ -323,31 +329,60 @@ onMounted(() => {
 
     <Transition name="slide">
       <div v-if="modelInfo && !isHidden" class="controls-scroll full-panel">
-        <VariableSelector v-model="varnameSelector" :model-info="modelInfo" />
-        <DimensionControl />
-        <BoundsControls
-          :picked-bounds-mode="pickedBoundsMode"
-          :data-bounds="dataBounds"
-          :default-bounds="defaultBounds"
-          :current-bounds="currentBounds"
-          :bound-modes="BOUND_MODES"
-          @update:picked-bounds-mode="
-            onPickedBoundsModeChange($event as TBoundModes)
-          "
+        <MultiscaleSelector
+          v-if="datasources?.multiscales"
+          :multiscales="datasources.multiscales"
+          @switch-level="$emit('switchLevel', $event)"
         />
-        <ColormapControls
+        <VariableSelector
+          v-model="varnameSelector"
           :model-info="modelInfo"
-          :auto-colormap="autoColormap"
-          :data-bounds="dataBounds"
-          @update:auto-colormap="autoColormap = $event"
-          @force-user-bounds="pickedBoundsMode = BOUND_MODES.USER"
+          :datasources="datasources"
+          :current-source="currentSource"
         />
+        <DimensionControl />
+        <div class="panel-block is-block w-100 colormap-section-header">
+          <button
+            type="button"
+            class="colormap-section-toggle"
+            :aria-expanded="!colormapCollapsed"
+            @click="colormapCollapsed = !colormapCollapsed"
+          >
+            <i
+              class="fa-solid"
+              :class="{
+                'fa-angle-right': colormapCollapsed,
+                'fa-angle-down': !colormapCollapsed,
+              }"
+            ></i>
+            <span>Colormap &amp; range</span>
+          </button>
+        </div>
+        <template v-if="!colormapCollapsed">
+          <BoundsControls
+            :picked-bounds-mode="pickedBoundsMode"
+            :data-bounds="dataBounds"
+            :default-bounds="defaultBounds"
+            :current-bounds="currentBounds"
+            :bound-modes="BOUND_MODES"
+            @update:picked-bounds-mode="
+              onPickedBoundsModeChange($event as TBoundModes)
+            "
+          />
+          <ColormapControls
+            :model-info="modelInfo"
+            :auto-colormap="autoColormap"
+            :data-bounds="dataBounds"
+            @update:auto-colormap="autoColormap = $event"
+            @force-user-bounds="pickedBoundsMode = BOUND_MODES.USER"
+          />
+        </template>
         <ProjectionControls v-if="showGlobeOnlyControls" />
         <MaskControls v-if="showGlobeOnlyControls" />
-        <ActionControls
+        <!-- <ActionControls
           @on-snapshot="() => $emit('onSnapshot')"
           @on-rotate="() => $emit('onRotate')"
-        />
+        /> -->
       </div>
     </Transition>
   </nav>
@@ -369,6 +404,20 @@ onMounted(() => {
 
   .full-panel {
     background: var(--bulma-scheme-main);
+  }
+
+  .colormap-section-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: inherit;
+    font-size: 1rem;
+    font-weight: 600;
   }
   .panel-block {
     padding: 0.75em 0.8em;

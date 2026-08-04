@@ -142,6 +142,16 @@ export default [
       "prettier/prettier": "warn",
     },
   },
+  {
+    rules: {
+      "prettier/prettier": [
+        "error",
+        {
+          "endOfLine": "auto"
+        },
+      ],
+    }
+  }
   // prettier disables style rules, re-enable curly
   {
     rules: {

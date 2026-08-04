@@ -2,7 +2,7 @@
 import type { Dayjs } from "dayjs";
 import debounce from "lodash.debounce";
 import { storeToRefs } from "pinia";
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 
 import { useGlobeControlStore } from "@/store/store";
 
@@ -12,6 +12,56 @@ const { varinfo, dimSlidersValues } = storeToRefs(store);
 // Local copies for debounced updates (excluding time dimension)
 const localSliders = ref<(number | null)[]>([]);
 const debouncedUpdaters = ref<Array<(value: number) => void>>([]);
+
+// Auto-play: per-dimension interval handles, keyed by dimension index.
+const playTimers = ref<Record<number, ReturnType<typeof setInterval>>>({});
+const PLAY_INTERVAL_MS = 500;
+
+function isPlaying(index: number): boolean {
+  return playTimers.value[index] !== undefined;
+}
+
+function stopPlaying(index: number) {
+  const timer = playTimers.value[index];
+  if (timer !== undefined) {
+    clearInterval(timer);
+    delete playTimers.value[index];
+  }
+}
+
+function stopAllPlaying() {
+  Object.keys(playTimers.value).forEach((index) => stopPlaying(Number(index)));
+}
+
+/** Advance one step, looping back to the start once past the end. */
+function advanceDim(
+  index: number,
+  range: { minBound: number; maxBound: number }
+) {
+  const current = localSliders.value[index] ?? range.minBound;
+  const next = current >= range.maxBound ? range.minBound : current + 1;
+  localSliders.value[index] = next;
+  // Bypass the debounced updater so the view keeps up at the play interval.
+  if (dimSlidersValues.value[index] !== undefined) {
+    dimSlidersValues.value[index] = next;
+  }
+}
+
+function togglePlay(
+  index: number,
+  range: { minBound: number; maxBound: number }
+) {
+  if (isPlaying(index)) {
+    stopPlaying(index);
+  } else {
+    playTimers.value[index] = setInterval(
+      () => advanceDim(index, range),
+      PLAY_INTERVAL_MS
+    );
+  }
+}
+
+onBeforeUnmount(stopAllPlaying);
 
 const hasValidDimensions = computed(() => {
   return (
@@ -26,10 +76,28 @@ const hasValidDimensions = computed(() => {
   );
 });
 
+/** Signature of the dimension structure, to detect real variable changes. */
+function dimensionsSignature(): string {
+  return (
+    varinfo.value?.dimRanges
+      ?.map((r) => `${r?.name}:${r?.minBound}-${r?.maxBound}`)
+      .join("|") ?? ""
+  );
+}
+let lastDimensionsSignature = dimensionsSignature();
+
 // Watch for changes in varinfo to update local state
 watch(
   () => varinfo.value,
   () => {
+    // varinfo is reassigned on every dim change (it reloads data). Only stop
+    // playback when the dimension *structure* changes (a real variable switch),
+    // otherwise auto-play would cancel itself after a single step.
+    const signature = dimensionsSignature();
+    if (signature !== lastDimensionsSignature) {
+      stopAllPlaying();
+      lastDimensionsSignature = signature;
+    }
     const newRanges = varinfo.value?.dimRanges;
     if (newRanges) {
       // Initialize local sliders fordimensions (skip index 0 which is time)
@@ -180,16 +248,58 @@ function dimensionLabel(name: string, dimInfo?: { longName?: string }): string {
             </div>
           </div>
 
-          <input
-            v-model.number="localSliders[index]"
-            class="w-100"
-            type="range"
-            :min="range.minBound"
-            :max="range.maxBound"
-          />
+          <div class="is-flex is-align-items-center dim-slider-row">
+            <button
+              type="button"
+              class="play-button"
+              :title="isPlaying(index) ? 'Pause' : 'Play'"
+              :aria-label="isPlaying(index) ? 'Pause' : 'Play'"
+              @click="togglePlay(index, range)"
+            >
+              <i
+                class="fa-solid"
+                :class="isPlaying(index) ? 'fa-pause' : 'fa-play'"
+              ></i>
+            </button>
+            <input
+              v-model.number="localSliders[index]"
+              class="w-100"
+              type="range"
+              :min="range.minBound"
+              :max="range.maxBound"
+            />
+          </div>
         </div>
       </div>
     </template>
   </div>
   <div v-else></div>
 </template>
+
+<style lang="scss" scoped>
+.dim-slider-row {
+  gap: 0.6em;
+}
+
+.play-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid var(--bulma-border, #dbdbdb);
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.7rem;
+  line-height: 1;
+  transition: background-color 0.15s ease;
+
+  &:hover {
+    background: var(--bulma-background, rgba(0, 0, 0, 0.05));
+  }
+}
+</style>
